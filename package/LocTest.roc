@@ -18,6 +18,7 @@
 ##    `outer` reconstructs the payload.
 import Markdown
 import Block exposing [Block]
+import Inl exposing [Inl]
 import Loc exposing [Loc]
 
 LocTest := [].{
@@ -40,6 +41,7 @@ LocTest := [].{
 
     ## One level: each block's `outer` sits inside `bound`, the level is ordered
     ## and disjoint, and each child level is checked inside its parent's `outer`.
+    ## The block's own INLINE nodes are checked inside its `outer` too (T0b).
     level_ok : List(Block), Loc.Ivl -> Bool
     level_ok = |blocks, bound| {
         result = List.fold(
@@ -50,11 +52,90 @@ LocTest := [].{
                 within = o.start >= bound.start and o.end <= bound.end and o.start <= o.end
                 ordered = o.start >= st.prev
                 kids = LocTest.level_ok(LocTest.children(b), o)
+                inls = LocTest.inl_ok(LocTest.inls_of(b), o)
+                { ok: st.ok and within and ordered and kids and inls, prev: o.end }
+            },
+        )
+        result.ok
+    }
+
+    ## The inline nodes a block owns directly.
+    inls_of : Block -> List(Inl)
+    inls_of = |b|
+        match b.node {
+            Para(ns) => ns
+            Heading(_, ns) => ns
+            _ => []
+        }
+
+    ## An inline node's block children (an emphasis/link subtree).
+    inl_kids : Inl -> List(Inl)
+    inl_kids = |n|
+        match n.node {
+            Emph(ks) => ks
+            Strong(ks) => ks
+            Strike(ks) => ks
+            Link(l) => l.kids
+            Image(m) => m.kids
+            _ => []
+        }
+
+    ## Every inline node's `outer` sits inside `bound`, siblings are ordered and
+    ## disjoint, and each subtree is checked inside its parent's `outer` — the
+    ## same shape as `level_ok`, one level down. Offsets are exact for prose and
+    ## approximate for stripped blocks (a heading's `#`, a quote's `> `), but
+    ## containment holds by construction because `Lower` clamps to the block.
+    inl_ok : List(Inl), Loc.Ivl -> Bool
+    inl_ok = |ns, bound| {
+        result = List.fold(
+            ns,
+            { ok: True, prev: bound.start },
+            |st, n| {
+                o = n.loc.outer
+                within = o.start >= bound.start and o.end <= bound.end and o.start <= o.end
+                ordered = o.start >= st.prev
+                kids = LocTest.inl_ok(LocTest.inl_kids(n), o)
                 { ok: st.ok and within and ordered and kids, prev: o.end }
             },
         )
         result.ok
     }
+
+    ## The source slice an inline node's `outer` covers.
+    inl_slice : Str, Inl -> Str
+    inl_slice = |src, n| {
+        o = n.loc.outer
+        Str.from_utf8_lossy(List.sublist(Str.to_utf8(src), { start: o.start, len: o.end - o.start }))
+    }
+
+    ## The first inline node of the first block.
+    first_inl : Str -> Inl
+    first_inl = |src|
+        match List.first(LocTest.inls_of(LocTest.first(src))) {
+            Ok(n) => n
+            Err(_) => Inl.at(0, 0, Text(""))
+        }
+
+    ## The first MARKED inline node (Strong/Emph/Code/Link/Image) of the first
+    ## block — the one whose markers the editor elides.
+    first_inl_of_kind : Str -> Inl
+    first_inl_of_kind = |src|
+        match List.find_first(LocTest.inls_of(LocTest.first(src)), LocTest.is_marked) {
+            Ok(n) => n
+            Err(_) => Inl.at(0, 0, Text(""))
+        }
+
+    is_marked : Inl -> Bool
+    is_marked = |n|
+        match n.node {
+            Strong(_) => True
+            Emph(_) => True
+            Strike(_) => True
+            Code(_) => True
+            Link(_) => True
+            Image(_) => True
+            _ => False
+        }
 
     ## The source slice a block's `outer` covers, for the (d') reconstruction
     ## checks below.
@@ -111,3 +192,18 @@ expect LocTest.first("## Title").loc.outer == { start: 0, end: 8 }
 
 # A fenced block spans from its opening ``` to its closing ```.
 expect LocTest.first("```\ncode\n```").loc.outer == { start: 0, end: 12 }
+
+# --- (T0b) inline outer spans the source, markers included ------------------
+
+# A bold run's Strong spans the whole `**bold**`, so the editor can elide the
+# markers: "x **bold** y" -> the Strong is bytes 2..10.
+expect LocTest.inl_slice("x **bold** y", LocTest.first_inl_of_kind("x **bold** y")) == "**bold**"
+
+# A code span spans its backticks: "a `code` b" -> bytes 2..8.
+expect LocTest.inl_slice("a `code` b", LocTest.first_inl_of_kind("a `code` b")) == "`code`"
+
+# A link spans the whole `[text](url)`.
+expect LocTest.inl_slice("see [text](/u) here", LocTest.first_inl_of_kind("see [text](/u) here")) == "[text](/u)"
+
+# The first Text run of a plain paragraph reconstructs verbatim.
+expect LocTest.inl_slice("hello world", LocTest.first_inl("hello world")) == "hello world"

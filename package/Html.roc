@@ -200,7 +200,7 @@ Html := [].{
     ## flat run list can only emit three adjacent `<strong>`s.
     node : Inl, Bool -> Str
     node = |n, safe|
-        match n {
+        match n.node {
             Text(t) => Html.escape(t)
             Code(t) => "<code>${Html.escape(t)}</code>"
             Emph(ks) => "<em>${Html.spans(ks, safe)}</em>"

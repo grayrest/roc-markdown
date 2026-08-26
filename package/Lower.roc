@@ -87,8 +87,8 @@ Lower := [].{
     block = |d, defs| {
         loc = Loc.at(d.at.start, d.at.end)
         match d.node {
-            Para(t) => Block.mk(loc, Para(Scan.run(t, defs)))
-            Heading(lvl, t) => Block.mk(loc, Heading(lvl, Scan.run(t, defs)))
+            Para(t) => Block.mk(loc, Para(Inl.shift_all(Scan.run(t, defs), loc.outer.start, loc.outer.end)))
+            Heading(lvl, t) => Block.mk(loc, Heading(lvl, Inl.shift_all(Scan.run(t, defs), loc.outer.start, loc.outer.end)))
             Code(c) => Block.mk(loc, Code(c))
             Quote(ks) => Block.mk(loc, Quote(List.map(ks, |k| Lower.block(k, defs))))
             Items(i) =>
@@ -121,12 +121,12 @@ Lower := [].{
                         match first.node {
                             Para(ns) =>
                                 List.concat(
-                                    [Block.mk(first.loc, Para(List.concat([Inl.Task(done)], ns)))],
+                                    [Block.mk(first.loc, Para(List.concat([Inl.mk(Loc.none(first.loc.outer.start), Task(done))], ns)))],
                                     List.drop_first(blocks, 1),
                                 )
-                            _ => List.concat([Block.mk(Loc.none(0), Para([Inl.Task(done)]))], blocks)
+                            _ => List.concat([Block.mk(Loc.none(0), Para([Inl.mk(Loc.none(0), Task(done))]))], blocks)
                         }
-                    Err(_) => List.concat([Block.mk(Loc.none(0), Para([Inl.Task(done)]))], blocks)
+                    Err(_) => List.concat([Block.mk(Loc.none(0), Para([Inl.mk(Loc.none(0), Task(done))]))], blocks)
                 }
             }
         }

@@ -54,7 +54,7 @@ Span := { text : Str, bold : Bool, italic : Bool, code : Bool, link : Str }.{
 
     lower : Inl, { bold : Bool, italic : Bool, code : Bool, link : Str } -> List(Span)
     lower = |n, st|
-        match n {
+        match n.node {
             Text(t) => [Span.{ text: t, bold: st.bold, italic: st.italic, code: st.code, link: st.link }]
             Code(t) => [Span.{ text: t, bold: st.bold, italic: st.italic, code: True, link: st.link }]
             Emph(ks) => Span.walk(ks, { ..st, italic: True })
