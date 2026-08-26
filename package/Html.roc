@@ -16,7 +16,7 @@ Html := [].{
 
     block : Block, Bool -> Str
     block = |b, safe|
-        match b {
+        match b.node {
             Para(sp) => "<p>${Html.spans(sp, safe)}</p>"
             Heading(lvl, sp) => {
                 tag = Html.heading_tag(lvl)
@@ -119,7 +119,11 @@ Html := [].{
                 "",
             )
             tail = match List.last(bs) {
-                Ok(Para(_)) => ""
+                Ok(b) =>
+                    match b.node {
+                        Para(_) => ""
+                        _ => "\n"
+                    }
                 _ => "\n"
             }
             "<li>${body}${tail}</li>\n"
@@ -131,14 +135,14 @@ Html := [].{
     ## list, a fence — is a real block and opens on its own line.
     tight_at : Block, U64, Bool -> Str
     tight_at = |b, i, safe|
-        match b {
+        match b.node {
             Para(ns) =>
                 if i == 0 {
                     Html.spans(ns, safe)
                 } else {
                     "\n${Html.spans(ns, safe)}"
                 }
-            other => "\n${Html.block(other, safe)}"
+            _ => "\n${Html.block(b, safe)}"
         }
 
     table : U64, List(Block.Align), List(Block.Cell), Bool -> Str

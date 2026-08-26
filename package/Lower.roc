@@ -7,6 +7,7 @@
 ## first walk can see every paragraph in the document before the second walk
 ## reads any of them.
 import Doc exposing [Doc]
+import Loc exposing [Loc]
 import Block exposing [Block]
 import Inl exposing [Inl]
 import Ref
@@ -34,23 +35,23 @@ Lower := [].{
             Err(_) => { docs: out, defs: defs }
             Ok(d) => {
                 rest = List.drop_first(docs, 1)
-                match d {
+                match d.node {
                     Para(t) => {
                         s = Lower.strip_defs(t.split_on("\n"), defs)
                         next = if Str.is_empty(Str.trim(s.text)) {
                             out
                         } else {
-                            List.append(out, Doc.Para(s.text))
+                            List.append(out, Doc.mk(d.at, Para(s.text)))
                         }
                         Lower.collect(rest, next, s.defs)
                     }
                     Quote(ks) => {
                         c = Lower.collect(ks, [], defs)
-                        Lower.collect(rest, List.append(out, Doc.Quote(c.docs)), c.defs)
+                        Lower.collect(rest, List.append(out, Doc.mk(d.at, Quote(c.docs))), c.defs)
                     }
                     Items(i) => {
                         e = Lower.collect_entries(i.entries, [], defs)
-                        Lower.collect(rest, List.append(out, Doc.Items({ ..i, entries: e.entries })), e.defs)
+                        Lower.collect(rest, List.append(out, Doc.mk(d.at, Items({ ..i, entries: e.entries }))), e.defs)
                     }
                     _ => Lower.collect(rest, List.append(out, d), defs)
                 }
@@ -83,23 +84,25 @@ Lower := [].{
     ## ## Walk two: the leaves become inlines
 
     block : Doc, List(Ref.Def) -> Block
-    block = |d, defs|
-        match d {
-            Para(t) => Block.Para(Scan.run(t, defs))
-            Heading(lvl, t) => Block.Heading(lvl, Scan.run(t, defs))
-            Code(c) => Block.Code(c)
-            Quote(ks) => Block.Quote(List.map(ks, |k| Lower.block(k, defs)))
+    block = |d, defs| {
+        loc = Loc.at(d.at.start, d.at.end)
+        match d.node {
+            Para(t) => Block.mk(loc, Para(Scan.run(t, defs)))
+            Heading(lvl, t) => Block.mk(loc, Heading(lvl, Scan.run(t, defs)))
+            Code(c) => Block.mk(loc, Code(c))
+            Quote(ks) => Block.mk(loc, Quote(List.map(ks, |k| Lower.block(k, defs))))
             Items(i) =>
-                Block.Items({
+                Block.mk(loc, Items({
                     ordered: i.ordered,
                     start: i.start,
                     tight: i.tight,
                     entries: List.map(i.entries, |e| Lower.entry(e, defs)),
-                })
-            Table(rows) => Table.parse(rows, defs)
-            Html(h) => Block.Html(h)
-            Rule => Block.Rule
+                }))
+            Table(rows) => Table.parse(rows, defs, loc)
+            Html(h) => Block.mk(loc, Html(h))
+            Rule => Block.mk(loc, Rule)
         }
+    }
 
     entry : { task : [NoTask, Todo, Done], blocks : List(Doc) }, List(Ref.Def) -> List(Block)
     entry = |e, defs|
@@ -114,12 +117,16 @@ Lower := [].{
             _ => {
                 done = state == Done
                 match List.first(blocks) {
-                    Ok(Para(ns)) =>
-                        List.concat(
-                            [Block.Para(List.concat([Inl.Task(done)], ns))],
-                            List.drop_first(blocks, 1),
-                        )
-                    _ => List.concat([Block.Para([Inl.Task(done)])], blocks)
+                    Ok(first) =>
+                        match first.node {
+                            Para(ns) =>
+                                List.concat(
+                                    [Block.mk(first.loc, Para(List.concat([Inl.Task(done)], ns)))],
+                                    List.drop_first(blocks, 1),
+                                )
+                            _ => List.concat([Block.mk(Loc.none(0), Para([Inl.Task(done)]))], blocks)
+                        }
+                    Err(_) => List.concat([Block.mk(Loc.none(0), Para([Inl.Task(done)]))], blocks)
                 }
             }
         }

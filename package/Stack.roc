@@ -15,6 +15,7 @@
 ## The finished tree is therefore only ever built bottom-up by appending, and no
 ## recursive value is ever rebuilt to change one of its variants
 import Doc exposing [Doc]
+import Loc exposing [Loc]
 import Lex
 import Scan
 import Ents
@@ -56,6 +57,11 @@ Stack := [].{
         entries : List(Stack.Ent),
         ## Pending raw lines, for a leaf.
         text : List(Str),
+        ## The SOURCE byte span this block occupies (rocsidian D9): `s0` is set
+        ## when the block opens, `s1` grows as it consumes lines and as `emit`
+        ## folds each finished child's far edge upward. `built` reads them.
+        s0 : U64,
+        s1 : U64,
     }
 
     ## ## Entry point
@@ -69,12 +75,29 @@ Stack := [].{
             Ok("") => List.drop_last(raw, 1)
             _ => raw
         }
-        lines = List.map(trimmed, Lex.expand_tabs)
-        Stack.finish(List.fold(lines, [Stack.fresh(Root)], |st, l| Stack.line(st, l)))
+        spans = Stack.line_spans(trimmed, 0, [])
+        Stack.finish(List.fold(spans, [Stack.fresh(Root)], |st, l| Stack.line(st, l)))
     }
 
+    ## A line with its SOURCE span, tab-expanded for the parser. `off`/`end` are
+    ## computed from the RAW (pre-expansion) split, so they track the original
+    ## bytes; `s` is what the parser reads. Tab expansion changes `s`'s length
+    ## but not the span, which is the whole point of measuring on the raw split.
+    Line : { off : U64, end : U64, s : Str }
+
+    line_spans : List(Str), U64, List(Stack.Line) -> List(Stack.Line)
+    line_spans = |lines, off, out|
+        match List.first(lines) {
+            Err(_) => out
+            Ok(l) => {
+                len = Str.count_utf8_bytes(l)
+                entry = { off, end: off + len, s: Lex.expand_tabs(l) }
+                Stack.line_spans(List.drop_first(lines, 1), off + len + 1, List.append(out, entry))
+            }
+        }
+
     fresh : Stack.Kind -> Stack.Open
-    fresh = |k| { kind: k, kids: [], entries: [], text: [] }
+    fresh = |k| { kind: k, kids: [], entries: [], text: [], s0: 0, s1: 0 }
 
     ## Close everything and return the document's children.
     finish : List(Stack.Open) -> List(Doc)
@@ -90,8 +113,10 @@ Stack := [].{
 
     ## ## One line
 
-    line : List(Stack.Open), Str -> List(Stack.Open)
-    line = |st, raw| {
+    line : List(Stack.Open), Stack.Line -> List(Stack.Open)
+    line = |st, l| {
+        raw = l.s
+        lo = { start: l.off, end: l.end }
         d = Stack.descend(st, 1, raw)
         ## Blankness belongs to the line with its container prefixes removed:
         ## `>>` inside two blockquotes IS a blank line. Reading the raw line
@@ -111,14 +136,14 @@ Stack := [].{
             d.depth
         }
         if all_matched and Stack.raw_leaf(top.kind) {
-            Stack.leaf_line(st, d.rest, blank)
+            Stack.leaf_line(st, d.rest, blank, lo)
         } else if !all_matched and !blank and Stack.lazy_ok(top.kind) and !Lex.starts_block(d.rest) {
             ## Lazy continuation. The containers did not match, but an open
             ## paragraph claims the line anyway — that IS the rule, and here it
             ## needs no flag because the matching step just told us.
-            Stack.push_text(st, Str.trim_start(d.rest))
+            Stack.push_text(st, Str.trim_start(d.rest), lo)
         } else {
-            Stack.starts(Stack.close_to(st, target), d.rest, blank)
+            Stack.starts(Stack.close_to(st, target), d.rest, blank, lo)
         }
     }
 
@@ -215,37 +240,40 @@ Stack := [].{
 
     ## ## Raw leaves
 
-    leaf_line : List(Stack.Open), Str, Bool -> List(Stack.Open)
-    leaf_line = |st, rest, blank| {
+    leaf_line : List(Stack.Open), Str, Bool, Loc.Ivl -> List(Stack.Open)
+    leaf_line = |st, rest, blank, lo| {
         top = Stack.tip(st)
         match top.kind {
             Fence(f) =>
                 if Lex.indent(rest, 0) < 4 and Lex.closes_fence(rest.trim(), f.ch, f.len) {
-                    Stack.pop(st)
+                    ## The closing fence line belongs to the block's SOURCE span
+                    ## even though it is not content — the editor reveals it under
+                    ## the caret — so extend `s1` to cover it before closing.
+                    Stack.pop(Stack.set_tip(st, { ..top, s1: lo.end }))
                 } else {
-                    Stack.set_tip(st, { ..top, text: top.text.append(Lex.unindent(rest, f.indent)) })
+                    Stack.set_tip(st, { ..top, text: top.text.append(Lex.unindent(rest, f.indent)), s1: lo.end })
                 }
             Indented =>
                 if blank {
                     ## Not `""`: a blank line inside indented code keeps
                     ## whatever sits past the four spaces, and the spec compares
                     ## it exactly.
-                    Stack.set_tip(st, { ..top, text: top.text.append(Lex.unindent(rest, 4)) })
+                    Stack.set_tip(st, { ..top, text: top.text.append(Lex.unindent(rest, 4)), s1: lo.end })
                 } else if Lex.indent(rest, 0) >= 4 {
-                    Stack.set_tip(st, { ..top, text: top.text.append(Lex.unindent(rest, 4)) })
+                    Stack.set_tip(st, { ..top, text: top.text.append(Lex.unindent(rest, 4)), s1: lo.end })
                 } else {
                     ## Ends at the first line that is neither blank nor
                     ## indented. Re-dispatched to `starts` and NOT to `line`:
                     ## the containers matched on the way in, so `rest` has
                     ## already had their prefixes removed and matching it a
                     ## second time would fail against its own entry.
-                    Stack.starts(Stack.pop(st), rest, False)
+                    Stack.starts(Stack.pop(st), rest, False, lo)
                 }
             RawHtml(ending) =>
                 if ending == "BLANK" and blank {
                     Stack.pop(st)
                 } else {
-                    added = Stack.set_tip(st, { ..top, text: top.text.append(rest) })
+                    added = Stack.set_tip(st, { ..top, text: top.text.append(rest), s1: lo.end })
                     if Lex.html_closes(rest.trim(), ending) {
                         Stack.pop(added)
                     } else {
@@ -258,8 +286,8 @@ Stack := [].{
 
     ## ## New block starts
 
-    starts : List(Stack.Open), Str, Bool -> List(Stack.Open)
-    starts = |raw_st, rest, blank| {
+    starts : List(Stack.Open), Str, Bool, Loc.Ivl -> List(Stack.Open)
+    starts = |raw_st, rest, blank, lo| {
         ## An entry has closed and left its list as the tip. Only a new entry
         ## may continue that list; anything else closes it, or the block lands
         ## in `Bullets.kids`, which nothing ever reads, and vanishes.
@@ -275,7 +303,7 @@ Stack := [].{
         if blank {
             Stack.blank_line(st)
         } else if ind >= 4 and !para_open {
-            Stack.push(Stack.mark_content(st), Indented, [Lex.unindent(rest, 4)])
+            Stack.push(Stack.mark_content(st), Indented, [Lex.unindent(rest, 4)], lo)
         } else if ind < 4 and Lex.opens_fence(t) {
             b = Str.to_utf8(t)
             ch = Scan.at(b, 0)
@@ -285,41 +313,43 @@ Stack := [].{
                 Stack.mark_content(Stack.close_leaf(st)),
                 Fence({ ch: ch, len: n, indent: ind, lang: Scan.unescape(Ents.decode(Lex.first_word(info))) }),
                 [],
+                lo,
             )
         } else if ind < 4
         and Lex.html_start(t) != ""
         and (!para_open or List.contains(Lex.block_tags, Str.with_ascii_lowercased(Lex.tag_name(t)))) {
-            opened = Stack.push(Stack.mark_content(Stack.close_leaf(st)), RawHtml(Lex.html_start(t)), [rest])
+            opened = Stack.push(Stack.mark_content(Stack.close_leaf(st)), RawHtml(Lex.html_start(t)), [rest], lo)
             if Lex.html_closes(t, Lex.html_start(t)) {
                 Stack.pop(opened)
             } else {
                 opened
             }
         } else if ind < 4 and para_open and Lex.setext_level(t) > 0 {
-            Stack.setext(st, Lex.setext_level(t), rest)
+            Stack.setext(st, Lex.setext_level(t), rest, lo)
         } else if ind < 4 and Lex.is_rule(t) {
-            Stack.emit(Stack.mark_content(Stack.close_leaf(st)), Doc.Rule)
+            Stack.emit(Stack.mark_content(Stack.close_leaf(st)), Doc.mk(lo, Rule))
         } else if ind < 4 and Stack.atx_level(t) > 0 {
             Stack.emit(
                 Stack.mark_content(Stack.close_leaf(st)),
-                Doc.Heading(Stack.atx_level(t), Stack.atx_text(t)),
+                Doc.mk(lo, Heading(Stack.atx_level(t), Stack.atx_text(t))),
             )
         } else if ind < 4 and t.starts_with(">") {
             match Stack.strip_quote(rest) {
                 Ok(inner) =>
                     Stack.starts(
-                        Stack.push(Stack.mark_content(Stack.close_leaf(st)), Quote, []),
+                        Stack.push(Stack.mark_content(Stack.close_leaf(st)), Quote, [], lo),
                         inner,
                         Str.is_empty(inner.trim()),
+                        lo,
                     )
-                Err(_) => Stack.push_para(st, rest)
+                Err(_) => Stack.push_para(st, rest, lo)
             }
         } else if ind < 4 and Stack.is_marker(rest, !para_open) {
-            Stack.open_entry(st, rest)
+            Stack.open_entry(st, rest, lo)
         } else if Stack.rows_open(top.kind) or (ind < 4 and t.starts_with("|")) {
-            Stack.push_rows(st, rest)
+            Stack.push_rows(st, rest, lo)
         } else {
-            Stack.push_para(st, rest)
+            Stack.push_para(st, rest, lo)
         }
     }
 
@@ -346,30 +376,30 @@ Stack := [].{
             _ => False
         }
 
-    push_rows : List(Stack.Open), Str -> List(Stack.Open)
-    push_rows = |st, rest| {
+    push_rows : List(Stack.Open), Str, Loc.Ivl -> List(Stack.Open)
+    push_rows = |st, rest, lo| {
         top = Stack.tip(st)
         if Stack.rows_open(top.kind) {
-            Stack.set_tip(st, { ..top, text: top.text.append(rest) })
+            Stack.set_tip(st, { ..top, text: top.text.append(rest), s1: lo.end })
         } else {
-            Stack.push(Stack.mark_content(Stack.close_leaf(st)), Rows, [rest])
+            Stack.push(Stack.mark_content(Stack.close_leaf(st)), Rows, [rest], lo)
         }
     }
 
-    push_para : List(Stack.Open), Str -> List(Stack.Open)
-    push_para = |st, rest| {
+    push_para : List(Stack.Open), Str, Loc.Ivl -> List(Stack.Open)
+    push_para = |st, rest, lo| {
         top = Stack.tip(st)
         if Stack.lazy_ok(top.kind) {
-            Stack.set_tip(st, { ..top, text: top.text.append(Str.trim_start(rest)) })
+            Stack.set_tip(st, { ..top, text: top.text.append(Str.trim_start(rest)), s1: lo.end })
         } else {
-            Stack.push(Stack.mark_content(Stack.close_leaf(st)), Para, [Str.trim_start(rest)])
+            Stack.push(Stack.mark_content(Stack.close_leaf(st)), Para, [Str.trim_start(rest)], lo)
         }
     }
 
-    push_text : List(Stack.Open), Str -> List(Stack.Open)
-    push_text = |st, t| {
+    push_text : List(Stack.Open), Str, Loc.Ivl -> List(Stack.Open)
+    push_text = |st, t, lo| {
         top = Stack.tip(st)
-        Stack.set_tip(st, { ..top, text: top.text.append(t) })
+        Stack.set_tip(st, { ..top, text: top.text.append(t), s1: lo.end })
     }
 
     ## A blank line closes a paragraph and is remembered by every open list, so
@@ -447,8 +477,8 @@ Stack := [].{
     ## The paragraph above a `===` or `---` becomes a heading. It reaches BACK
     ## into what is already buffered, which is why it cannot be an ordinary
     ## block start.
-    setext : List(Stack.Open), U8, Str -> List(Stack.Open)
-    setext = |st, lvl, under| {
+    setext : List(Stack.Open), U8, Str, Loc.Ivl -> List(Stack.Open)
+    setext = |st, lvl, under, lo| {
         top = Stack.tip(st)
         ## Leading definitions are not heading content. They stay behind as a
         ## paragraph of their own so phase 2 still collects them — dropping them
@@ -460,16 +490,16 @@ Stack := [].{
         carried = if List.is_empty(lead) {
             base
         } else {
-            Stack.emit(base, Doc.Para(Str.join_with(lead, "\n")))
+            Stack.emit(base, Doc.mk({ start: top.s0, end: top.s1 }, Para(Str.join_with(lead, "\n"))))
         }
         if List.is_empty(kept) {
             ## The paragraph was nothing but definitions, so there is nothing to
             ## underline and the `===` is ordinary text.
-            Stack.push_para(carried, under)
+            Stack.push_para(carried, under, lo)
         } else {
             Stack.emit(
                 Stack.mark_content(carried),
-                Doc.Heading(lvl, Str.trim_end(Str.join_with(kept, "\n"))),
+                Doc.mk({ start: top.s0, end: lo.end }, Heading(lvl, Str.trim_end(Str.join_with(kept, "\n")))),
             )
         }
     }
@@ -483,19 +513,19 @@ Stack := [].{
             _ => True
         }
 
-    open_entry : List(Stack.Open), Str -> List(Stack.Open)
-    open_entry = |st, rest| {
+    open_entry : List(Stack.Open), Str, Loc.Ivl -> List(Stack.Open)
+    open_entry = |st, rest, lo| {
         top = Stack.tip(st)
         para_open = Stack.lazy_ok(top.kind) and !List.is_empty(top.text)
         match Lex.marker_here(rest, !para_open) {
-            Bullet(col, _h) => Stack.open_entry_at(st, col, False, 1, Lex.marker_char(rest.trim()), Lex.entry_head(rest, col))
-            Numbered(col, num, _h) => Stack.open_entry_at(st, col, True, num, Lex.marker_char(rest.trim()), Lex.entry_head(rest, col))
-            NotList => Stack.push_para(st, rest)
+            Bullet(col, _h) => Stack.open_entry_at(st, col, False, 1, Lex.marker_char(rest.trim()), Lex.entry_head(rest, col), lo)
+            Numbered(col, num, _h) => Stack.open_entry_at(st, col, True, num, Lex.marker_char(rest.trim()), Lex.entry_head(rest, col), lo)
+            NotList => Stack.push_para(st, rest, lo)
         }
     }
 
-    open_entry_at : List(Stack.Open), U64, Bool, U64, Str, Str -> List(Stack.Open)
-    open_entry_at = |st, col, ord, num, ch, head| {
+    open_entry_at : List(Stack.Open), U64, Bool, U64, Str, Str, Loc.Ivl -> List(Stack.Open)
+    open_entry_at = |st, col, ord, num, ch, head, lo| {
         closed = Stack.close_leaf(st)
         ## The tip is a `Bullets` only when this line's own entry already failed
         ## to match and was closed — i.e. this is a SIBLING. If the tip is still
@@ -518,14 +548,15 @@ Stack := [].{
                 Stack.mark_content(base),
                 Bullets({ ordered: ord, start: num, marker: ch, loose: False, pending: False }),
                 [],
+                lo,
             )
         }
         task = Lex.task_of(head)
-        with_entry = Stack.push(listed, Entry({ col: col, task: task.state }), [])
+        with_entry = Stack.push(listed, Entry({ col: col, task: task.state }), [], lo)
         if Str.is_empty(task.rest.trim()) {
             with_entry
         } else {
-            Stack.starts(with_entry, task.rest, False)
+            Stack.starts(with_entry, task.rest, False, lo)
         }
     }
 
@@ -589,7 +620,7 @@ Stack := [].{
                 parent = Stack.tip(rest)
                 Stack.set_tip(
                     rest,
-                    { ..parent, entries: parent.entries.append({ task: e.task, blocks: top.kids }) },
+                    { ..parent, entries: parent.entries.append({ task: e.task, blocks: top.kids }), s1: Stack.max_u64(parent.s1, top.s1) },
                 )
             }
             _ =>
@@ -607,11 +638,14 @@ Stack := [].{
     emit : List(Stack.Open), Doc -> List(Stack.Open)
     emit = |st, d| {
         parent = Stack.tip(st)
-        Stack.set_tip(st, { ..parent, kids: parent.kids.append(d) })
+        Stack.set_tip(st, { ..parent, kids: parent.kids.append(d), s1: Stack.max_u64(parent.s1, d.at.end) })
     }
 
-    push : List(Stack.Open), Stack.Kind, List(Str) -> List(Stack.Open)
-    push = |st, k, txt| List.append(st, { kind: k, kids: [], entries: [], text: txt })
+    max_u64 : U64, U64 -> U64
+    max_u64 = |a, b| if a > b { a } else { b }
+
+    push : List(Stack.Open), Stack.Kind, List(Str), Loc.Ivl -> List(Stack.Open)
+    push = |st, k, txt, at| List.append(st, { kind: k, kids: [], entries: [], text: txt, s0: at.start, s1: at.end })
 
     set_tip : List(Stack.Open), Stack.Open -> List(Stack.Open)
     set_tip = |st, o| List.append(List.drop_last(st, 1), o)
@@ -624,34 +658,34 @@ Stack := [].{
             Root => Err(Nothing)
             ## Handled by `pop`; an entry never becomes a `Doc` of its own.
             Entry(_) => Err(Nothing)
-            Quote => Ok(Doc.Quote(o.kids))
+            Quote => Ok(Doc.mk({ start: o.s0, end: o.s1 }, Quote(o.kids)))
             Bullets(l) =>
                 if List.is_empty(o.entries) {
                     Err(Nothing)
                 } else {
                     Ok(
-                        Doc.Items({
+                        Doc.mk({ start: o.s0, end: o.s1 }, Items({
                             ordered: l.ordered,
                             start: l.start,
                             tight: !l.loose,
                             entries: o.entries,
-                        }),
+                        })),
                     )
                 }
             Para =>
                 if List.is_empty(o.text) {
                     Err(Nothing)
                 } else {
-                    Ok(Doc.Para(Str.trim_end(Str.join_with(o.text, "\n"))))
+                    Ok(Doc.mk({ start: o.s0, end: o.s1 }, Para(Str.trim_end(Str.join_with(o.text, "\n")))))
                 }
-            Fence(f) => Ok(Doc.Code({ lang: f.lang, text: Str.join_with(o.text, "\n") }))
-            Indented => Ok(Doc.Code({ lang: "", text: Str.join_with(Stack.drop_blanks(o.text), "\n") }))
-            RawHtml(_) => Ok(Doc.Html(Str.join_with(o.text, "\n")))
+            Fence(f) => Ok(Doc.mk({ start: o.s0, end: o.s1 }, Code({ lang: f.lang, text: Str.join_with(o.text, "\n") })))
+            Indented => Ok(Doc.mk({ start: o.s0, end: o.s1 }, Code({ lang: "", text: Str.join_with(Stack.drop_blanks(o.text), "\n") })))
+            RawHtml(_) => Ok(Doc.mk({ start: o.s0, end: o.s1 }, Html(Str.join_with(o.text, "\n"))))
             Rows =>
                 if List.is_empty(o.text) {
                     Err(Nothing)
                 } else {
-                    Ok(Doc.Table(o.text))
+                    Ok(Doc.mk({ start: o.s0, end: o.s1 }, Table(o.text)))
                 }
         }
 

@@ -4,6 +4,7 @@
 ## shape of a whole RUN rather than by a line's prefix — the header/delimiter
 ## distinction is invisible until the run is complete.
 import Ref
+import Loc exposing [Loc]
 import Block exposing [Block]
 import Scan
 
@@ -16,8 +17,8 @@ Table := [].{
     ## Alignment is not parsed. The corpus this targets had zero `:---` markers
     ## across 467 delimiter cells, and a field that is always the same value is
     ## worse than no field at all.
-    parse : List(Str), List(Ref.Def) -> Block
-    parse = |lines, defs| {
+    parse : List(Str), List(Ref.Def), Loc.T -> Block
+    parse = |lines, defs, loc| {
         all = List.map(lines, Table.cells_of)
         rows = List.keep_if(all, |r| !Table.is_delim(r))
         if !Table.well_formed(all) {
@@ -25,7 +26,7 @@ Table := [].{
             ## carry exactly as many cells as the header. A run that fails that
             ## is prose that happens to contain pipes, and rendering it as a
             ## one-column table silently drops the rest of every row.
-            Block.Para(Scan.run(Str.join_with(lines, "\n"), defs))
+            Block.mk(loc, Para(Scan.run(Str.join_with(lines, "\n"), defs)))
         } else
         match List.get(rows, 0) {
             Ok(header) => {
@@ -34,15 +35,15 @@ Table := [].{
                     Ok(delim) => List.map(delim, Table.align_of)
                     Err(_) => []
                 }
-                Block.Table({
+                Block.mk(loc, Table({
                     ncols: n,
                     align: align,
                     cells: List.join(List.map(rows, |r| Table.fit(r, n, defs))),
-                })
+                }))
             }
             ## A run that was nothing but a delimiter row. Degrades to an empty
             ## table rather than crashing on the missing header.
-            Err(_) => Block.Table({ ncols: 0, align: [], cells: [] })
+            Err(_) => Block.mk(loc, Table({ ncols: 0, align: [], cells: [] }))
         }
     }
 

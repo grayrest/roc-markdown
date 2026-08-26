@@ -21,7 +21,7 @@ Test := [].{
 
     tag : Block -> Str
     tag = |b|
-        match b {
+        match b.node {
             Para(sp) => "P(${Test.text(sp)})"
             Heading(l, sp) => "H${l.to_str()}(${Test.text(sp)})"
             Code(c) => "C[${c.lang}](${c.text})"
