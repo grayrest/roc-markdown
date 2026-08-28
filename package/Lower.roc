@@ -36,12 +36,12 @@ Lower := [].{
             Ok(d) => {
                 rest = List.drop_first(docs, 1)
                 match d.node {
-                    Para(t) => {
-                        s = Lower.strip_defs(t.split_on("\n"), defs)
-                        next = if Str.is_empty(Str.trim(s.text)) {
+                    Para(segs) => {
+                        s = Lower.strip_defs(segs, defs)
+                        next = if Str.is_empty(Str.trim(Loc.joined(s.segs))) {
                             out
                         } else {
-                            List.append(out, Doc.mk(d.at, Para(s.text)))
+                            List.append(out, Doc.mk(Lower.after_defs(d.at, s.segs), Para(s.segs)))
                         }
                         Lower.collect(rest, next, s.defs)
                     }
@@ -73,12 +73,30 @@ Lower := [].{
         }
 
     ## Peel definitions off the front of a paragraph's lines until one fails.
-    strip_defs : List(Str), List(Ref.Def) -> { text : Str, defs : List(Ref.Def) }
-    strip_defs = |lines, defs|
-        match Defs.def_at(lines) {
+    ##
+    ## Dropping SEGMENTS rather than joining what is left is what keeps the rest
+    ## of the paragraph anchored: each surviving line still carries the offset it
+    ## always had, so a definition above a reference costs the text below it
+    ## nothing.
+    strip_defs : List(Loc.Seg), List(Ref.Def) -> { segs : List(Loc.Seg), defs : List(Ref.Def) }
+    strip_defs = |segs, defs|
+        match Defs.def_at(List.map(segs, |g| g.text)) {
             Ok(d) =>
-                Lower.strip_defs(List.drop_first(lines, d.used), List.append(defs, d.def))
-            Err(_) => { text: Str.join_with(lines, "\n"), defs: defs }
+                Lower.strip_defs(List.drop_first(segs, d.used), List.append(defs, d.def))
+            Err(_) => { segs: segs, defs: defs }
+        }
+
+    ## The paragraph's source span, once its leading definitions are gone.
+    ##
+    ## It starts where the surviving text does, not where the block did: the
+    ## definitions vanish from the tree, so a span still covering them would put
+    ## the editor's paragraph decoration over source the paragraph no longer
+    ## holds. The bytes they occupied become a gap the app owns (D11b).
+    after_defs : Loc.Ivl, List(Loc.Seg) -> Loc.Ivl
+    after_defs = |at, segs|
+        match List.first(segs) {
+            Ok(g) => { start: Loc.max(at.start, g.off), end: at.end }
+            Err(_) => at
         }
 
     ## ## Walk two: the leaves become inlines
@@ -87,8 +105,8 @@ Lower := [].{
     block = |d, defs| {
         loc = Loc.at(d.at.start, d.at.end)
         match d.node {
-            Para(t) => Block.mk(loc, Para(Inl.shift_all(Scan.run(t, defs), loc.outer.start, loc.outer.end)))
-            Heading(lvl, t) => Block.mk(loc, Heading(lvl, Inl.shift_all(Scan.run(t, defs), loc.outer.start, loc.outer.end)))
+            Para(segs) => Block.mk(loc, Para(Lower.inlines(segs, defs)))
+            Heading(lvl, segs) => Block.mk(loc, Heading(lvl, Lower.inlines(segs, defs)))
             Code(c) => Block.mk(loc, Code(c))
             Quote(ks) => Block.mk(loc, Quote(List.map(ks, |k| Lower.block(k, defs))))
             Items(i) =>
@@ -103,6 +121,13 @@ Lower := [].{
             Rule => Block.mk(loc, Rule)
         }
     }
+
+    ## Scan a leaf's payload, then map the scanner's offsets back onto the
+    ## source through the leaf's line table. The two steps are separate because
+    ## `Scan` has no business knowing what phase 1 stripped — it reads a string
+    ## and reports offsets into it, and the table is what those offsets mean.
+    inlines : List(Loc.Seg), List(Ref.Def) -> List(Inl)
+    inlines = |segs, defs| Inl.project_all(Scan.run(Loc.joined(segs), defs), segs)
 
     entry : { task : [NoTask, Todo, Done], blocks : List(Doc) }, List(Ref.Def) -> List(Block)
     entry = |e, defs|

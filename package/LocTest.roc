@@ -65,6 +65,9 @@ LocTest := [].{
         match b.node {
             Para(ns) => ns
             Heading(_, ns) => ns
+            ## Row-major, so the cells are already in source order — which is
+            ## what `inl_ok` needs to check them the way it checks a paragraph.
+            Table(t) => List.join(t.cells)
             _ => []
         }
 
@@ -82,9 +85,12 @@ LocTest := [].{
 
     ## Every inline node's `outer` sits inside `bound`, siblings are ordered and
     ## disjoint, and each subtree is checked inside its parent's `outer` — the
-    ## same shape as `level_ok`, one level down. Offsets are exact for prose and
-    ## approximate for stripped blocks (a heading's `#`, a quote's `> `), but
-    ## containment holds by construction because `Lower` clamps to the block.
+    ## same shape as `level_ok`, one level down.
+    ##
+    ## Containment is the weak half of the claim and it always held, even when
+    ## every offset was short by the marker phase 1 stripped — clamping to the
+    ## block is enough for it. The EXACTNESS assertions at the bottom of this
+    ## file are what actually pin the offsets down.
     inl_ok : List(Inl), Loc.Ivl -> Bool
     inl_ok = |ns, bound| {
         result = List.fold(
@@ -107,6 +113,32 @@ LocTest := [].{
         o = n.loc.outer
         Str.from_utf8_lossy(List.sublist(Str.to_utf8(src), { start: o.start, len: o.end - o.start }))
     }
+
+    ## Every block in the tree, parents before children.
+    all_blocks : List(Block) -> List(Block)
+    all_blocks = |bs|
+        List.join(List.map(bs, |b| List.concat([b], LocTest.all_blocks(LocTest.children(b)))))
+
+    ## Every inline node in a forest, parents before children.
+    all_inls : List(Inl) -> List(Inl)
+    all_inls = |ns|
+        List.join(List.map(ns, |n| List.concat([n], LocTest.all_inls(LocTest.inl_kids(n)))))
+
+    ## The first MARKED inline ANYWHERE in the tree, not just in the first
+    ## top-level block. The depth is the point: an offset that is merely shifted
+    ## by a constant passes every check made at column 0.
+    marked : Str -> Inl
+    marked = |src| {
+        ns = LocTest.all_inls(List.join(List.map(LocTest.all_blocks(Markdown.parse(src)), LocTest.inls_of)))
+        match List.find_first(ns, LocTest.is_marked) {
+            Ok(n) => n
+            Err(_) => Inl.at(0, 0, Text(""))
+        }
+    }
+
+    ## The source that node claims.
+    marked_slice : Str -> Str
+    marked_slice = |src| LocTest.inl_slice(src, LocTest.marked(src))
 
     ## The first inline node of the first block.
     first_inl : Str -> Inl
@@ -207,3 +239,61 @@ expect LocTest.inl_slice("see [text](/u) here", LocTest.first_inl_of_kind("see [
 
 # The first Text run of a plain paragraph reconstructs verbatim.
 expect LocTest.inl_slice("hello world", LocTest.first_inl("hello world")) == "hello world"
+
+# --- (T0b) an inline's source is EXACT wherever phase 1 stripped a prefix -----
+#
+# Each line below is the same defect at a different stripping site: the scanner
+# reports offsets into the payload phase 1 kept, and before the line table those
+# were added to the block's start — which is where the MARKER begins, not where
+# the text does. `- [x](y)` reported the same offsets as a bare `[x](y)`, so the
+# range landed two bytes early and sliced `- [x](`.
+
+# A list marker, a quote marker, an ATX marker, bare indent.
+expect LocTest.marked_slice("- [x](y)") == "[x](y)"
+expect LocTest.marked_slice("> [x](y)") == "[x](y)"
+expect LocTest.marked_slice("## [x](y)") == "[x](y)"
+expect LocTest.marked_slice("  [x](y)") == "[x](y)"
+
+# Depth: the prefix is four bytes here, and nesting is where a constant is most
+# obviously not one.
+expect LocTest.marked_slice("> > **b**") == "**b**"
+expect LocTest.marked_slice("- - **b**") == "**b**"
+
+# A checkbox is stripped positionally, before the text it precedes.
+expect LocTest.marked_slice("- [ ] **b**") == "**b**"
+
+# Soft-wrapped: line two carries continuation indent line one does not, so no
+# single delta can place both.
+expect LocTest.marked_slice("- text\n  [x](y)") == "[x](y)"
+expect LocTest.marked_slice("> a\n> **b**") == "**b**"
+
+# Tab expansion is LENGTH-CHANGING, which is why the offset is measured back
+# from the line's end rather than forward from its start.
+expect LocTest.marked_slice("-\t**b**") == "**b**"
+expect LocTest.marked_slice(">\t**b**") == "**b**"
+
+# An ATX closing sequence comes off the END and must not move the text.
+expect LocTest.marked_slice("## **b** ##") == "**b**"
+
+# A setext heading is built by reaching back into a buffered paragraph; its
+# lines keep the offsets they were stamped with.
+expect LocTest.marked_slice("> **b**\n> ===") == "**b**"
+
+# A definition lifted out of the paragraph leaves the text below it anchored.
+expect LocTest.marked_slice("[r]: /u\n[x](y)") == "[x](y)"
+
+# A table cell anchors to its row, not to the cell string the splitter made.
+expect LocTest.marked_slice("| a | **b** |\n| --- | --- |") == "**b**"
+expect LocTest.marked_slice("> | a | **b** |\n> | --- | --- |") == "**b**"
+
+# --- (d) `content` is a LIST for the reason it was made one ------------------
+
+# An inline spanning a soft line break is TWO disjoint source ranges with the
+# second line's stripped `> ` between them. `outer` covers the prefix; `content`
+# does not, and concatenating the source over it reconstructs the payload.
+expect LocTest.marked_slice("> **a\n> b**") == "**a\n> b**"
+expect LocTest.marked("> **a\n> b**").loc.content == [{ start: 2, end: 5 }, { start: 8, end: 11 }]
+
+# --- (c') a paragraph that lost leading definitions starts at its text (D11b)
+
+expect LocTest.first("[a]: /1\ntext").loc.outer == { start: 8, end: 12 }

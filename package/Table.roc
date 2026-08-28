@@ -6,6 +6,7 @@
 import Ref
 import Loc exposing [Loc]
 import Block exposing [Block]
+import Inl exposing [Inl]
 import Scan
 
 Table := [].{
@@ -17,22 +18,26 @@ Table := [].{
     ## Alignment is not parsed. The corpus this targets had zero `:---` markers
     ## across 467 delimiter cells, and a field that is always the same value is
     ## worse than no field at all.
-    parse : List(Str), List(Ref.Def), Loc.T -> Block
+    ## One source line, split into cells that each remember where they came
+    ## from. `src` is kept beside them so a padded cell has somewhere to sit.
+    Row : { src : Loc.Seg, cells : List(Loc.Seg) }
+
+    parse : List(Loc.Seg), List(Ref.Def), Loc.T -> Block
     parse = |lines, defs, loc| {
-        all = List.map(lines, Table.cells_of)
-        rows = List.keep_if(all, |r| !Table.is_delim(r))
+        all = List.map(lines, |l| { src: l, cells: Table.cells_of(l) })
+        rows = List.keep_if(all, |r| !Table.is_delim(r.cells))
         if !Table.well_formed(all) {
             ## Not a table at all: the delimiter row must be the SECOND line and
             ## carry exactly as many cells as the header. A run that fails that
             ## is prose that happens to contain pipes, and rendering it as a
             ## one-column table silently drops the rest of every row.
-            Block.mk(loc, Para(Scan.run(Str.join_with(lines, "\n"), defs)))
+            Block.mk(loc, Para(Inl.project_all(Scan.run(Loc.joined(lines), defs), lines)))
         } else
         match List.get(rows, 0) {
             Ok(header) => {
-                n = List.len(header)
+                n = List.len(header.cells)
                 align = match List.get(all, 1) {
-                    Ok(delim) => List.map(delim, Table.align_of)
+                    Ok(delim) => List.map(delim.cells, Table.align_of)
                     Err(_) => []
                 }
                 Block.mk(loc, Table({
@@ -57,12 +62,30 @@ Table := [].{
     ## the escape is defined to work inside other spans too, so `` `\|` `` is a
     ## code span containing a pipe, and an inline-phase unescape would never look
     ## inside the backticks.
-    cells_of : Str -> List(Str)
-    cells_of = |raw|
+    ## Each cell keeps the source offset of its first non-space byte, so an
+    ## inline inside a cell anchors to the row it was written on rather than to
+    ## the cell string the splitter handed the scanner.
+    ##
+    ## **One case still drifts: `\|` inside a cell.** The unescape happens here
+    ## and shortens the cell by a byte, so anything after it in the SAME cell
+    ## reports a byte early. Fixing it needs a segment per escape — the same
+    ## machinery `Loc.T.content` already has, applied below the line — and no
+    ## table in the corpus this targets contains one.
+    cells_of : Loc.Seg -> List(Loc.Seg)
+    cells_of = |row| {
+        base = row.off + Table.lead(row.text)
         List.map(
-            Table.trim_edges(Table.scan(Str.to_utf8(raw.trim()))),
-            |c| Str.from_utf8_lossy(c).trim(),
+            Table.trim_edges(Table.scan(Str.to_utf8(row.text.trim()))),
+            |c| {
+                raw = Str.from_utf8_lossy(c.bytes)
+                { off: base + c.off + Table.lead(raw), text: raw.trim() }
+            },
         )
+    }
+
+    ## How many bytes of leading whitespace a `trim` would take off.
+    lead : Str -> U64
+    lead = |t| Str.count_utf8_bytes(t) - Str.count_utf8_bytes(Str.trim_start(t))
 
     ## Split on unescaped `|`, turning `\|` into a literal `|`.
     ##
@@ -70,24 +93,29 @@ Table := [].{
     ## escaped BACKSLASH followed by a delimiter — the second `\` consumes the
     ## first and leaves nothing pending for the `|`. A trailing `\` at end of row
     ## is emitted as itself.
-    scan : List(U8) -> List(List(U8))
+    ## A cell's bytes, and the index it started at in the row — `i` counts the
+    ## row's own bytes while `cur` collects the unescaped ones, so the two do not
+    ## have to agree in length.
+    Cut : { off : U64, bytes : List(U8) }
+
+    scan : List(U8) -> List(Table.Cut)
     scan = |bytes| {
         st = List.fold(
             bytes,
-            { cur: [], out: [], esc: False },
+            { cur: [], out: [], esc: False, i: 0, at: 0 },
             |a, b|
                 if a.esc {
                     if b == 124 {
-                        { ..a, cur: List.append(a.cur, 124), esc: False }
+                        { ..a, cur: List.append(a.cur, 124), esc: False, i: a.i + 1 }
                     } else {
-                        { ..a, cur: List.append(List.append(a.cur, 92), b), esc: False }
+                        { ..a, cur: List.append(List.append(a.cur, 92), b), esc: False, i: a.i + 1 }
                     }
                 } else if b == 92 {
-                    { ..a, esc: True }
+                    { ..a, esc: True, i: a.i + 1 }
                 } else if b == 124 {
-                    { ..a, out: List.append(a.out, a.cur), cur: [] }
+                    { ..a, out: List.append(a.out, { off: a.at, bytes: a.cur }), cur: [], i: a.i + 1, at: a.i + 1 }
                 } else {
-                    { ..a, cur: List.append(a.cur, b) }
+                    { ..a, cur: List.append(a.cur, b), i: a.i + 1 }
                 },
         )
         last = if st.esc {
@@ -95,38 +123,51 @@ Table := [].{
         } else {
             st.cur
         }
-        List.append(st.out, last)
+        List.append(st.out, { off: st.at, bytes: last })
     }
 
     ## Drop the cells the delimiting pipes produce: `| a |` scans to
     ## `["", "a", ""]`, and only an EMPTY cell at either end is a delimiter
     ## artefact. A row with no outer pipes (`a | b`) loses nothing.
-    trim_edges : List(List(U8)) -> List(List(U8))
+    trim_edges : List(Table.Cut) -> List(Table.Cut)
     trim_edges = |cs| {
         head_dropped = match List.first(cs) {
-            Ok([]) => List.drop_first(cs, 1)
-            _ => cs
+            Ok(c) =>
+                if List.is_empty(c.bytes) {
+                    List.drop_first(cs, 1)
+                } else {
+                    cs
+                }
+            Err(_) => cs
         }
         match List.last(head_dropped) {
-            Ok([]) => List.drop_last(head_dropped, 1)
-            _ => head_dropped
+            Ok(c) =>
+                if List.is_empty(c.bytes) {
+                    List.drop_last(head_dropped, 1)
+                } else {
+                    head_dropped
+                }
+            Err(_) => head_dropped
         }
     }
 
-    well_formed : List(List(Str)) -> Bool
+    well_formed : List(Table.Row) -> Bool
     well_formed = |all|
         match List.first(all) {
             Ok(header) =>
                 match List.get(all, 1) {
-                    Ok(second) => Table.is_delim(second) and List.len(second) == List.len(header)
+                    Ok(second) =>
+                        Table.is_delim(second.cells)
+                        and List.len(second.cells) == List.len(header.cells)
                     Err(_) => False
                 }
             Err(_) => False
         }
 
     ## A leading colon means left, a trailing one right, both mean centre.
-    align_of : Str -> Block.Align
-    align_of = |c| {
+    align_of : Loc.Seg -> Block.Align
+    align_of = |cell| {
+        c = cell.text
         left = c.starts_with(":")
         right = c.ends_with(":")
         if left and right {
@@ -140,10 +181,10 @@ Table := [].{
         }
     }
 
-    is_delim : List(Str) -> Bool
+    is_delim : List(Loc.Seg) -> Bool
     is_delim = |cs|
         !List.is_empty(cs)
-        and List.len(List.keep_if(cs, Table.is_delim_cell)) == List.len(cs)
+        and List.len(List.keep_if(cs, |c| Table.is_delim_cell(c.text))) == List.len(cs)
 
     is_delim_cell : Str -> Bool
     is_delim_cell = |c| {
@@ -162,7 +203,15 @@ Table := [].{
     ## `concat` then `take_first` rather than a length comparison, so the pad and
     ## the truncate are the same expression and cannot disagree about the
     ## boundary case where the row is already exactly `n`.
-    fit : List(Str), U64, List(Ref.Def) -> List(Block.Cell)
-    fit = |row, n, defs|
-        List.map(List.take_first(List.concat(row, List.repeat("", n)), n), |c| Scan.run(c, defs))
+    ## A padded cell has no source, so it collapses to a zero-width location at
+    ## the end of the row that was short — the same treatment `Loc.none` gives
+    ## any node the parser synthesized (D11b).
+    fit : Table.Row, U64, List(Ref.Def) -> List(Block.Cell)
+    fit = |row, n, defs| {
+        pad = { off: row.src.off + Str.count_utf8_bytes(row.src.text), text: "" }
+        List.map(
+            List.take_first(List.concat(row.cells, List.repeat(pad, n)), n),
+            |c| Inl.project_all(Scan.run(c.text, defs), [c]),
+        )
+    }
 }

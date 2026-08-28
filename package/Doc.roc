@@ -16,17 +16,26 @@
 ## quote stripping and tab expansion change a node's text but not where it began
 ## and ended in the source — so it is exact even where the payload is not a
 ## verbatim slice.
+##
+## **The leaves phase 2 re-parses are `List(Loc.Seg)`, not `Str`** (D9b). `at`
+## alone locates the BLOCK; it cannot locate anything inside one, because what
+## phase 1 stripped is decided per line and the payload no longer records it.
+## The leaves phase 2 does NOT re-parse — a fence's contents, a raw HTML block —
+## stay `Str`, since nothing downstream needs an offset into them.
 import Loc exposing [Loc]
 
 Doc := { at : Loc.Ivl, node : Doc.Node }.{
     Node : [
-        ## Raw paragraph text: soft-wrapped source lines joined with `\n`, so the
-        ## inline scanner can still see where the breaks were and emit `SoftBreak`.
-        Para(Str),
+        ## Raw paragraph text, one segment per soft-wrapped source line.
+        ## `Loc.joined` gives the scanner the `\n`-joined string it wants, so it
+        ## can still see where the breaks were and emit `SoftBreak`.
+        Para(List(Loc.Seg)),
         ## `Heading(level, raw)` — level 1..6, ATX or setext. The raw text has
         ## already had its markers and any closing sequence stripped, because that
-        ## is lexical and belongs to phase 1.
-        Heading(U8, Str),
+        ## is lexical and belongs to phase 1 — and the segment is what records
+        ## how much, so an inline inside the heading still lands on its source.
+        ## One segment for ATX, one per line for setext.
+        Heading(U8, List(Loc.Seg)),
         ## Already final: a fence's contents are not inline-parsed in either pass,
         ## so this leaf is carried through untouched.
         Code({ lang : Str, text : Str }),
@@ -48,7 +57,7 @@ Doc := { at : Loc.Ivl, node : Doc.Node }.{
         ## Kept unsplit because a cell's text is inline content, and because the
         ## header/delimiter/body distinction is only decidable once the run is
         ## complete — which it is, by the time this is built.
-        Table(List(Str)),
+        Table(List(Loc.Seg)),
         Html(Str),
         Rule,
     ]

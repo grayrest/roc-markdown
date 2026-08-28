@@ -55,8 +55,13 @@ Stack := [].{
         kids : List(Doc),
         ## Finished entries, for `Bullets` only.
         entries : List(Stack.Ent),
-        ## Pending raw lines, for a leaf.
-        text : List(Str),
+        ## Pending raw lines, for a leaf — each anchored to the source offset
+        ## its text starts at (D9b), because by the time phase 2 reads one, the
+        ## marker or prefix that displaced it is gone. `Loc.seg` measures the
+        ## offset from the line's END, so every append site passes the text it
+        ## kept plus anything it stripped AFTER that text; for all but a closing
+        ## ATX sequence those are the same string.
+        text : List(Loc.Seg),
         ## The SOURCE byte span this block occupies (rocsidian D9): `s0` is set
         ## when the block opens, `s1` grows as it consumes lines and as `emit`
         ## folds each finished child's far edge upward. `built` reads them.
@@ -251,16 +256,16 @@ Stack := [].{
                     ## the caret — so extend `s1` to cover it before closing.
                     Stack.pop(Stack.set_tip(st, { ..top, s1: lo.end }))
                 } else {
-                    Stack.set_tip(st, { ..top, text: top.text.append(Lex.unindent(rest, f.indent)), s1: lo.end })
+                    Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, Lex.unindent(rest, f.indent))), s1: lo.end })
                 }
             Indented =>
                 if blank {
                     ## Not `""`: a blank line inside indented code keeps
                     ## whatever sits past the four spaces, and the spec compares
                     ## it exactly.
-                    Stack.set_tip(st, { ..top, text: top.text.append(Lex.unindent(rest, 4)), s1: lo.end })
+                    Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, Lex.unindent(rest, 4))), s1: lo.end })
                 } else if Lex.indent(rest, 0) >= 4 {
-                    Stack.set_tip(st, { ..top, text: top.text.append(Lex.unindent(rest, 4)), s1: lo.end })
+                    Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, Lex.unindent(rest, 4))), s1: lo.end })
                 } else {
                     ## Ends at the first line that is neither blank nor
                     ## indented. Re-dispatched to `starts` and NOT to `line`:
@@ -273,7 +278,7 @@ Stack := [].{
                 if ending == "BLANK" and blank {
                     Stack.pop(st)
                 } else {
-                    added = Stack.set_tip(st, { ..top, text: top.text.append(rest), s1: lo.end })
+                    added = Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, rest)), s1: lo.end })
                     if Lex.html_closes(rest.trim(), ending) {
                         Stack.pop(added)
                     } else {
@@ -303,7 +308,7 @@ Stack := [].{
         if blank {
             Stack.blank_line(st)
         } else if ind >= 4 and !para_open {
-            Stack.push(Stack.mark_content(st), Indented, [Lex.unindent(rest, 4)], lo)
+            Stack.push(Stack.mark_content(st), Indented, [Loc.seg_of(lo, Lex.unindent(rest, 4))], lo)
         } else if ind < 4 and Lex.opens_fence(t) {
             b = Str.to_utf8(t)
             ch = Scan.at(b, 0)
@@ -318,7 +323,7 @@ Stack := [].{
         } else if ind < 4
         and Lex.html_start(t) != ""
         and (!para_open or List.contains(Lex.block_tags, Str.with_ascii_lowercased(Lex.tag_name(t)))) {
-            opened = Stack.push(Stack.mark_content(Stack.close_leaf(st)), RawHtml(Lex.html_start(t)), [rest], lo)
+            opened = Stack.push(Stack.mark_content(Stack.close_leaf(st)), RawHtml(Lex.html_start(t)), [Loc.seg_of(lo, rest)], lo)
             if Lex.html_closes(t, Lex.html_start(t)) {
                 Stack.pop(opened)
             } else {
@@ -331,7 +336,7 @@ Stack := [].{
         } else if ind < 4 and Stack.atx_level(t) > 0 {
             Stack.emit(
                 Stack.mark_content(Stack.close_leaf(st)),
-                Doc.mk(lo, Heading(Stack.atx_level(t), Stack.atx_text(t))),
+                Doc.mk(lo, Heading(Stack.atx_level(t), [Loc.seg(lo, Stack.atx_tail(rest), Stack.atx_text(t))])),
             )
         } else if ind < 4 and t.starts_with(">") {
             match Stack.strip_quote(rest) {
@@ -380,9 +385,9 @@ Stack := [].{
     push_rows = |st, rest, lo| {
         top = Stack.tip(st)
         if Stack.rows_open(top.kind) {
-            Stack.set_tip(st, { ..top, text: top.text.append(rest), s1: lo.end })
+            Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, rest)), s1: lo.end })
         } else {
-            Stack.push(Stack.mark_content(Stack.close_leaf(st)), Rows, [rest], lo)
+            Stack.push(Stack.mark_content(Stack.close_leaf(st)), Rows, [Loc.seg_of(lo, rest)], lo)
         }
     }
 
@@ -390,16 +395,16 @@ Stack := [].{
     push_para = |st, rest, lo| {
         top = Stack.tip(st)
         if Stack.lazy_ok(top.kind) {
-            Stack.set_tip(st, { ..top, text: top.text.append(Str.trim_start(rest)), s1: lo.end })
+            Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, Str.trim_start(rest))), s1: lo.end })
         } else {
-            Stack.push(Stack.mark_content(Stack.close_leaf(st)), Para, [Str.trim_start(rest)], lo)
+            Stack.push(Stack.mark_content(Stack.close_leaf(st)), Para, [Loc.seg_of(lo, Str.trim_start(rest))], lo)
         }
     }
 
     push_text : List(Stack.Open), Str, Loc.Ivl -> List(Stack.Open)
     push_text = |st, t, lo| {
         top = Stack.tip(st)
-        Stack.set_tip(st, { ..top, text: top.text.append(t), s1: lo.end })
+        Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, t)), s1: lo.end })
     }
 
     ## A blank line closes a paragraph and is remembered by every open list, so
@@ -462,6 +467,18 @@ Stack := [].{
             t
         }
 
+    ## The heading's text plus everything phase 1 dropped after it — the closing
+    ## `##` sequence and any trailing spaces — so `Loc.seg` can measure back from
+    ## the line's end. Taken from the UNTRIMMED line for that reason: `atx_text`
+    ## works on `rest.trim()`, and a trimmed tail would place the text as many
+    ## bytes late as the line has trailing whitespace.
+    atx_tail : Str -> Str
+    atx_tail = |rest| {
+        detabbed = Stack.detab(Str.trim_start(rest))
+        lvl = Lex.leading_hashes(Str.to_utf8(detabbed), 0)
+        Str.trim_start(Str.drop_first_bytes(detabbed, lvl.to_u64()).ok_or(""))
+    }
+
     atx_text : Str -> Str
     atx_text = |t| {
         detabbed = Stack.detab(t)
@@ -483,14 +500,14 @@ Stack := [].{
         ## Leading definitions are not heading content. They stay behind as a
         ## paragraph of their own so phase 2 still collects them — dropping them
         ## here would lose the definition along with the text.
-        n = Defs.lead_lines(top.text, 0)
+        n = Defs.lead_lines(List.map(top.text, |g| g.text), 0)
         lead = List.sublist(top.text, { start: 0, len: n })
         kept = List.drop_first(top.text, n)
         base = Stack.pop_discard(st)
         carried = if List.is_empty(lead) {
             base
         } else {
-            Stack.emit(base, Doc.mk({ start: top.s0, end: top.s1 }, Para(Str.join_with(lead, "\n"))))
+            Stack.emit(base, Doc.mk({ start: top.s0, end: top.s1 }, Para(lead)))
         }
         if List.is_empty(kept) {
             ## The paragraph was nothing but definitions, so there is nothing to
@@ -499,7 +516,7 @@ Stack := [].{
         } else {
             Stack.emit(
                 Stack.mark_content(carried),
-                Doc.mk({ start: top.s0, end: lo.end }, Heading(lvl, Str.trim_end(Str.join_with(kept, "\n")))),
+                Doc.mk({ start: top.s0, end: lo.end }, Heading(lvl, Loc.trim_last(kept))),
             )
         }
     }
@@ -644,7 +661,7 @@ Stack := [].{
     max_u64 : U64, U64 -> U64
     max_u64 = |a, b| if a > b { a } else { b }
 
-    push : List(Stack.Open), Stack.Kind, List(Str), Loc.Ivl -> List(Stack.Open)
+    push : List(Stack.Open), Stack.Kind, List(Loc.Seg), Loc.Ivl -> List(Stack.Open)
     push = |st, k, txt, at| List.append(st, { kind: k, kids: [], entries: [], text: txt, s0: at.start, s1: at.end })
 
     set_tip : List(Stack.Open), Stack.Open -> List(Stack.Open)
@@ -676,11 +693,11 @@ Stack := [].{
                 if List.is_empty(o.text) {
                     Err(Nothing)
                 } else {
-                    Ok(Doc.mk({ start: o.s0, end: o.s1 }, Para(Str.trim_end(Str.join_with(o.text, "\n")))))
+                    Ok(Doc.mk({ start: o.s0, end: o.s1 }, Para(Loc.trim_last(o.text))))
                 }
-            Fence(f) => Ok(Doc.mk({ start: o.s0, end: o.s1 }, Code({ lang: f.lang, text: Str.join_with(o.text, "\n") })))
-            Indented => Ok(Doc.mk({ start: o.s0, end: o.s1 }, Code({ lang: "", text: Str.join_with(Stack.drop_blanks(o.text), "\n") })))
-            RawHtml(_) => Ok(Doc.mk({ start: o.s0, end: o.s1 }, Html(Str.join_with(o.text, "\n"))))
+            Fence(f) => Ok(Doc.mk({ start: o.s0, end: o.s1 }, Code({ lang: f.lang, text: Loc.joined(o.text) })))
+            Indented => Ok(Doc.mk({ start: o.s0, end: o.s1 }, Code({ lang: "", text: Loc.joined(Stack.drop_blanks(o.text)) })))
+            RawHtml(_) => Ok(Doc.mk({ start: o.s0, end: o.s1 }, Html(Loc.joined(o.text))))
             Rows =>
                 if List.is_empty(o.text) {
                     Err(Nothing)
@@ -691,11 +708,16 @@ Stack := [].{
 
     ## A blank line does not end an indented code block, so trailing blanks are
     ## buffered and dropped here if they turn out to have been the terminator.
-    drop_blanks : List(Str) -> List(Str)
+    drop_blanks : List(Loc.Seg) -> List(Loc.Seg)
     drop_blanks = |ls|
         match List.last(ls) {
-            Ok("") => Stack.drop_blanks(List.drop_last(ls, 1))
-            _ => ls
+            Ok(g) =>
+                if Str.is_empty(g.text) {
+                    Stack.drop_blanks(List.drop_last(ls, 1))
+                } else {
+                    ls
+                }
+            Err(_) => ls
         }
 
     ## ## Looseness

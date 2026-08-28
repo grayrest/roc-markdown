@@ -61,9 +61,32 @@ Inl := { loc : Loc.T, node : Inl.Node }.{
     mk : Loc.T, Inl.Node -> Inl
     mk = |loc, node| Inl.{ loc, node }
 
-    ## Shift a subtree's locations by `base`, clamping to `cap` — moves the
-    ## block-relative offsets the scanner produced into the document's absolute
-    ## byte space (T0b). `Lower` calls it once per block.
+    ## Map a subtree's locations from PAYLOAD offsets to SOURCE offsets, through
+    ## the leaf's line table (D9b). `Lower` calls it once per block.
+    ##
+    ## This is what a plain shift could not do. The scanner's offsets are into
+    ## the text phase 1 handed it — markers, quote prefixes and indentation
+    ## already gone — and how much came off is a fact about each LINE, so the
+    ## table is consulted per line rather than a single base added to everything.
+    project_all : List(Inl), List(Loc.Seg) -> List(Inl)
+    project_all = |ks, segs| List.map(ks, |k| Inl.project(k, segs))
+
+    project : Inl, List(Loc.Seg) -> Inl
+    project = |i, segs| {
+        node = match i.node {
+            Emph(ks) => Emph(Inl.project_all(ks, segs))
+            Strong(ks) => Strong(Inl.project_all(ks, segs))
+            Strike(ks) => Strike(Inl.project_all(ks, segs))
+            Link(l) => Link({ ..l, kids: Inl.project_all(l.kids, segs) })
+            Image(m) => Image({ ..m, kids: Inl.project_all(m.kids, segs) })
+            other => other
+        }
+        Inl.{ loc: Loc.project(segs, i.loc.outer.start, i.loc.outer.end), node }
+    }
+
+    ## Shift a subtree's locations by `base`, clamping to `cap`. Both offsets are
+    ## in the SAME payload — `Scan` uses it to lift a reference label's inlines
+    ## into the enclosing scan — so no line table is involved and none is needed.
     shift_all : List(Inl), U64, U64 -> List(Inl)
     shift_all = |ks, base, cap| List.map(ks, |k| Inl.shift(k, base, cap))
 
