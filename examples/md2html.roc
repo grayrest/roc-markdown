@@ -114,7 +114,7 @@ html_name = |name| {
 title_of : List(Block) -> Str
 title_of = |blocks| {
 	for block in blocks {
-		match block {
+		match block.node {
 			Heading(1, spans) => return Inl.text_of(spans)
 			_ => {}
 		}
