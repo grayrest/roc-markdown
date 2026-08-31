@@ -9,11 +9,21 @@
 import Markdown
 
 SpecTest := [].{
+    ## The API under test, built once against the default (HTML5) table. A
+    ## record field holding a function has to be bound before it is called —
+    ## `Md.api.parse(src)` reads as a method call — so each helper binds first.
+    api : Markdown.Api
+    api = Markdown.setup(Markdown.default)
+
     ## `to_html_unsafe`, because the spec's expected output contains raw HTML.
     ## cmark runs this same suite with `--unsafe` for the same reason; the
     ## DEFAULT lowering is the safe one, and that is the point of the split.
     html : Str -> Str
-    html = |src| Markdown.to_html_unsafe(Markdown.parse(src))
+    html = |src| {
+        parse = SpecTest.api.parse
+        to_html_unsafe = SpecTest.api.to_html_unsafe
+        to_html_unsafe(parse(src))
+    }
 }
 
 

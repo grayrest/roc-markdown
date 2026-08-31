@@ -7,6 +7,7 @@ import Ref
 import Loc exposing [Loc]
 import Block exposing [Block]
 import Inl exposing [Inl]
+import Ents
 import Scan
 
 Table := [].{
@@ -22,8 +23,8 @@ Table := [].{
     ## from. `src` is kept beside them so a padded cell has somewhere to sit.
     Row : { src : Loc.Seg, cells : List(Loc.Seg) }
 
-    parse : List(Loc.Seg), List(Ref.Def), Loc.T -> Block
-    parse = |lines, defs, loc| {
+    parse : List(Ents.Ent), List(Loc.Seg), List(Ref.Def), Loc.T -> Block
+    parse = |tbl, lines, defs, loc| {
         all = List.map(lines, |l| { src: l, cells: Table.cells_of(l) })
         rows = List.keep_if(all, |r| !Table.is_delim(r.cells))
         if !Table.well_formed(all) {
@@ -31,7 +32,7 @@ Table := [].{
             ## carry exactly as many cells as the header. A run that fails that
             ## is prose that happens to contain pipes, and rendering it as a
             ## one-column table silently drops the rest of every row.
-            Block.mk(loc, Para(Inl.project_all(Scan.run(Loc.joined(lines), defs), lines)))
+            Block.mk(loc, Para(Inl.project_all(Scan.run(tbl, Loc.joined(lines), defs), lines)))
         } else
         match List.get(rows, 0) {
             Ok(header) => {
@@ -43,7 +44,7 @@ Table := [].{
                 Block.mk(loc, Table({
                     ncols: n,
                     align: align,
-                    cells: List.join(List.map(rows, |r| Table.fit(r, n, defs))),
+                    cells: List.join(List.map(rows, |r| Table.fit(tbl, r, n, defs))),
                 }))
             }
             ## A run that was nothing but a delimiter row. Degrades to an empty
@@ -206,12 +207,12 @@ Table := [].{
     ## A padded cell has no source, so it collapses to a zero-width location at
     ## the end of the row that was short — the same treatment `Loc.none` gives
     ## any node the parser synthesized (D11b).
-    fit : Table.Row, U64, List(Ref.Def) -> List(Block.Cell)
-    fit = |row, n, defs| {
+    fit : List(Ents.Ent), Table.Row, U64, List(Ref.Def) -> List(Block.Cell)
+    fit = |tbl, row, n, defs| {
         pad = { off: row.src.off + Str.count_utf8_bytes(row.src.text), text: "" }
         List.map(
             List.take_first(List.concat(row.cells, List.repeat(pad, n)), n),
-            |c| Inl.project_all(Scan.run(c.text, defs), [c]),
+            |c| Inl.project_all(Scan.run(tbl, c.text, defs), [c]),
         )
     }
 }

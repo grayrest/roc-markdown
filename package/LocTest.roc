@@ -22,6 +22,18 @@ import Inl exposing [Inl]
 import Loc exposing [Loc]
 
 LocTest := [].{
+    ## The API under test, built once against the default (HTML5) table, with
+    ## `parse` bound out of the record — a field holding a function reads as a
+    ## method call if it is invoked in place.
+    api : Markdown.Api
+    api = Markdown.setup(Markdown.default)
+
+    parse : Str -> List(Block)
+    parse = |src| {
+        p = LocTest.api.parse
+        p(src)
+    }
+
     ## The immediate block children of a block.
     children : Block -> List(Block)
     children = |b|
@@ -35,7 +47,7 @@ LocTest := [].{
     loc_ok : Str -> Bool
     loc_ok = |src| {
         len = Str.count_utf8_bytes(src)
-        blocks = Markdown.parse(src)
+        blocks = LocTest.parse(src)
         LocTest.level_ok(blocks, { start: 0, end: len })
     }
 
@@ -129,7 +141,7 @@ LocTest := [].{
     ## by a constant passes every check made at column 0.
     marked : Str -> Inl
     marked = |src| {
-        ns = LocTest.all_inls(List.join(List.map(LocTest.all_blocks(Markdown.parse(src)), LocTest.inls_of)))
+        ns = LocTest.all_inls(List.join(List.map(LocTest.all_blocks(LocTest.parse(src)), LocTest.inls_of)))
         match List.find_first(ns, LocTest.is_marked) {
             Ok(n) => n
             Err(_) => Inl.at(0, 0, Text(""))
@@ -179,7 +191,7 @@ LocTest := [].{
 
     first : Str -> Block
     first = |src|
-        match List.first(Markdown.parse(src)) {
+        match List.first(LocTest.parse(src)) {
             Ok(b) => b
             Err(_) => Block.mk(Loc.none(0), Rule)
         }

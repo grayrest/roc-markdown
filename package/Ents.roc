@@ -11,49 +11,44 @@
 Ents := [].{
     Ent : { n : Str, c : Str }
 
-    ## **The table every lookup in this package reads, and the one line to edit
-    ## to shrink a build.**
+    ## **The table is now a PARAMETER, not the `Ents.table` constant that used
+    ## to sit here.** `Markdown.setup` picks one and the API it returns closes
+    ## over it, so which table a build links is a call the caller makes rather
+    ## than a line in this file someone edits.
     ##
-    ## `Ents.full` is the whole HTML5 set; `Ents.minimal` is the five XML
-    ## predefined references. Point this at `Ents.minimal` and the other table
-    ## is unreferenced, so nothing links it.
-    ##
-    ## It is a source edit rather than a parameter on purpose. Threading the
-    ## choice through the parser meant an extra refcounted argument on about
-    ## thirty functions, and that CODE cost most of what dropping the table
-    ## saved — the profile is in the README. A build-time constant costs
-    ## nothing and reaches every caller, including the ones inside this module
-    ## that a public parameter could never have reached.
-    table : List(Ents.Ent)
-    table = Ents.full
+    ## What that costs is visible in every signature below and in `Scan`, `Defs`,
+    ## `Stack`, `Lower` and `Table`: the table rides along as an argument the
+    ## whole way down to `lookup`. Whether it BUYS anything depends on the
+    ## compiler dropping the table the caller did not pick, which is what this
+    ## branch exists to measure.
 
     ## Decode every entity in a string. For the places that are not scanned
     ## character by character — a link destination, a title, a fence's info
     ## string — which are exactly the places entities were being missed.
-    decode : Str -> Str
-    decode = |t|
+    decode : List(Ents.Ent), Str -> Str
+    decode = |tbl, t|
         if t.contains("&") {
-            Str.from_utf8_lossy(Ents.walk(Str.to_utf8(t), 0, []))
+            Str.from_utf8_lossy(Ents.walk(tbl, Str.to_utf8(t), 0, []))
         } else {
             t
         }
 
-    walk : List(U8), U64, List(U8) -> List(U8)
-    walk = |b, i, out|
+    walk : List(Ents.Ent), List(U8), U64, List(U8) -> List(U8)
+    walk = |tbl, b, i, out|
         if i >= List.len(b) {
             out
         } else if List.get(b, i) == Ok(38) {
             match Ents.semi(b, i + 1) {
                 Ok(close) =>
-                    match Ents.lookup(Str.from_utf8_lossy(List.sublist(b, { start: i + 1, len: close - i - 1 }))) {
-                        Ok(ch) => Ents.walk(b, close + 1, List.concat(out, Str.to_utf8(ch)))
-                        Err(_) => Ents.walk(b, i + 1, List.append(out, 38))
+                    match Ents.lookup(tbl, Str.from_utf8_lossy(List.sublist(b, { start: i + 1, len: close - i - 1 }))) {
+                        Ok(ch) => Ents.walk(tbl, b, close + 1, List.concat(out, Str.to_utf8(ch)))
+                        Err(_) => Ents.walk(tbl, b, i + 1, List.append(out, 38))
                     }
-                Err(_) => Ents.walk(b, i + 1, List.append(out, 38))
+                Err(_) => Ents.walk(tbl, b, i + 1, List.append(out, 38))
             }
         } else {
             match List.get(b, i) {
-                Ok(c) => Ents.walk(b, i + 1, List.append(out, c))
+                Ok(c) => Ents.walk(tbl, b, i + 1, List.append(out, c))
                 Err(_) => out
             }
         }
@@ -68,12 +63,12 @@ Ents := [].{
             Ents.semi(b, i + 1)
         }
 
-    lookup : Str -> Try(Str, [NotFound])
-    lookup = |name|
+    lookup : List(Ents.Ent), Str -> Try(Str, [NotFound])
+    lookup = |tbl, name|
         if name.starts_with("#") {
             Ents.numeric(name)
         } else {
-            match List.find_first(Ents.table, |e| e.n == name) {
+            match List.find_first(tbl, |e| e.n == name) {
                 Ok(e) => Ok(e.c)
                 Err(_) => Err(NotFound)
             }

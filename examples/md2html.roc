@@ -77,12 +77,19 @@ convert! = |arg| {
 
 	markdown = source.read_utf8!() ? ReadFailed
 
+	## The API, built once against the default HTML5 entity table. A record
+	## field holding a function is bound before it is called — invoked in place
+	## it reads as a method call.
+	md = Markdown.setup(Markdown.default)
+	parse = md.parse
+	to_html = md.to_html
+
 	## The parse, once. Both the title and the body are read off it.
 	blocks : List(Block)
-	blocks = Markdown.parse(markdown)
+	blocks = parse(markdown)
 
 	out = Path.from_raw(Utf8(html_name(name)))
-	out.write_utf8!(document(title_of(blocks), Markdown.to_html(blocks))) ? WriteFailed
+	out.write_utf8!(document(title_of(blocks), to_html(blocks))) ? WriteFailed
 
 	Stdout.line!("${name} -> ${out.display()}")?
 
@@ -114,7 +121,7 @@ html_name = |name| {
 title_of : List(Block) -> Str
 title_of = |blocks| {
 	for block in blocks {
-		match block {
+		match block.node {
 			Heading(1, spans) => return Inl.text_of(spans)
 			_ => {}
 		}

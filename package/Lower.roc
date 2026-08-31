@@ -11,15 +11,16 @@ import Loc exposing [Loc]
 import Block exposing [Block]
 import Inl exposing [Inl]
 import Ref
+import Ents
 import Defs
 import Scan
 import Table
 
 Lower := [].{
-    run : List(Doc) -> List(Block)
-    run = |docs| {
-        c = Lower.collect(docs, [], [])
-        List.map(c.docs, |d| Lower.block(d, c.defs))
+    run : List(Ents.Ent), List(Doc) -> List(Block)
+    run = |tbl, docs| {
+        c = Lower.collect(tbl, docs, [], [])
+        List.map(c.docs, |d| Lower.block(tbl, d, c.defs))
     }
 
     ## ## Walk one: lift the definitions out
@@ -29,42 +30,43 @@ Lower := [].{
     ## enforce, because a paragraph is already a paragraph by the time we look.
     ## A paragraph that is nothing but definitions leaves no block behind.
 
-    collect : List(Doc), List(Doc), List(Ref.Def) -> { docs : List(Doc), defs : List(Ref.Def) }
-    collect = |docs, out, defs|
+    collect : List(Ents.Ent), List(Doc), List(Doc), List(Ref.Def) -> { docs : List(Doc), defs : List(Ref.Def) }
+    collect = |tbl, docs, out, defs|
         match List.first(docs) {
             Err(_) => { docs: out, defs: defs }
             Ok(d) => {
                 rest = List.drop_first(docs, 1)
                 match d.node {
                     Para(segs) => {
-                        s = Lower.strip_defs(segs, defs)
+                        s = Lower.strip_defs(tbl, segs, defs)
                         next = if Str.is_empty(Str.trim(Loc.joined(s.segs))) {
                             out
                         } else {
                             List.append(out, Doc.mk(Lower.after_defs(d.at, s.segs), Para(s.segs)))
                         }
-                        Lower.collect(rest, next, s.defs)
+                        Lower.collect(tbl, rest, next, s.defs)
                     }
                     Quote(ks) => {
-                        c = Lower.collect(ks, [], defs)
-                        Lower.collect(rest, List.append(out, Doc.mk(d.at, Quote(c.docs))), c.defs)
+                        c = Lower.collect(tbl, ks, [], defs)
+                        Lower.collect(tbl, rest, List.append(out, Doc.mk(d.at, Quote(c.docs))), c.defs)
                     }
                     Items(i) => {
-                        e = Lower.collect_entries(i.entries, [], defs)
-                        Lower.collect(rest, List.append(out, Doc.mk(d.at, Items({ ..i, entries: e.entries }))), e.defs)
+                        e = Lower.collect_entries(tbl, i.entries, [], defs)
+                        Lower.collect(tbl, rest, List.append(out, Doc.mk(d.at, Items({ ..i, entries: e.entries }))), e.defs)
                     }
-                    _ => Lower.collect(rest, List.append(out, d), defs)
+                    _ => Lower.collect(tbl, rest, List.append(out, d), defs)
                 }
             }
         }
 
-    collect_entries : List({ task : [NoTask, Todo, Done], blocks : List(Doc) }), List({ task : [NoTask, Todo, Done], blocks : List(Doc) }), List(Ref.Def) -> { entries : List({ task : [NoTask, Todo, Done], blocks : List(Doc) }), defs : List(Ref.Def) }
-    collect_entries = |entries, out, defs|
+    collect_entries : List(Ents.Ent), List({ task : [NoTask, Todo, Done], blocks : List(Doc) }), List({ task : [NoTask, Todo, Done], blocks : List(Doc) }), List(Ref.Def) -> { entries : List({ task : [NoTask, Todo, Done], blocks : List(Doc) }), defs : List(Ref.Def) }
+    collect_entries = |tbl, entries, out, defs|
         match List.first(entries) {
             Err(_) => { entries: out, defs: defs }
             Ok(e) => {
-                c = Lower.collect(e.blocks, [], defs)
+                c = Lower.collect(tbl, e.blocks, [], defs)
                 Lower.collect_entries(
+                    tbl,
                     List.drop_first(entries, 1),
                     List.append(out, { task: e.task, blocks: c.docs }),
                     c.defs,
@@ -78,11 +80,11 @@ Lower := [].{
     ## of the paragraph anchored: each surviving line still carries the offset it
     ## always had, so a definition above a reference costs the text below it
     ## nothing.
-    strip_defs : List(Loc.Seg), List(Ref.Def) -> { segs : List(Loc.Seg), defs : List(Ref.Def) }
-    strip_defs = |segs, defs|
-        match Defs.def_at(List.map(segs, |g| g.text)) {
+    strip_defs : List(Ents.Ent), List(Loc.Seg), List(Ref.Def) -> { segs : List(Loc.Seg), defs : List(Ref.Def) }
+    strip_defs = |tbl, segs, defs|
+        match Defs.def_at(tbl, List.map(segs, |g| g.text)) {
             Ok(d) =>
-                Lower.strip_defs(List.drop_first(segs, d.used), List.append(defs, d.def))
+                Lower.strip_defs(tbl, List.drop_first(segs, d.used), List.append(defs, d.def))
             Err(_) => { segs: segs, defs: defs }
         }
 
@@ -101,22 +103,22 @@ Lower := [].{
 
     ## ## Walk two: the leaves become inlines
 
-    block : Doc, List(Ref.Def) -> Block
-    block = |d, defs| {
+    block : List(Ents.Ent), Doc, List(Ref.Def) -> Block
+    block = |tbl, d, defs| {
         loc = Loc.at(d.at.start, d.at.end)
         match d.node {
-            Para(segs) => Block.mk(loc, Para(Lower.inlines(segs, defs)))
-            Heading(lvl, segs) => Block.mk(loc, Heading(lvl, Lower.inlines(segs, defs)))
+            Para(segs) => Block.mk(loc, Para(Lower.inlines(tbl, segs, defs)))
+            Heading(lvl, segs) => Block.mk(loc, Heading(lvl, Lower.inlines(tbl, segs, defs)))
             Code(c) => Block.mk(loc, Code(c))
-            Quote(ks) => Block.mk(loc, Quote(List.map(ks, |k| Lower.block(k, defs))))
+            Quote(ks) => Block.mk(loc, Quote(List.map(ks, |k| Lower.block(tbl, k, defs))))
             Items(i) =>
                 Block.mk(loc, Items({
                     ordered: i.ordered,
                     start: i.start,
                     tight: i.tight,
-                    entries: List.map(i.entries, |e| Lower.entry(e, defs)),
+                    entries: List.map(i.entries, |e| Lower.entry(tbl, e, defs)),
                 }))
-            Table(rows) => Table.parse(rows, defs, loc)
+            Table(rows) => Table.parse(tbl, rows, defs, loc)
             Html(h) => Block.mk(loc, Html(h))
             Rule => Block.mk(loc, Rule)
         }
@@ -126,12 +128,12 @@ Lower := [].{
     ## source through the leaf's line table. The two steps are separate because
     ## `Scan` has no business knowing what phase 1 stripped — it reads a string
     ## and reports offsets into it, and the table is what those offsets mean.
-    inlines : List(Loc.Seg), List(Ref.Def) -> List(Inl)
-    inlines = |segs, defs| Inl.project_all(Scan.run(Loc.joined(segs), defs), segs)
+    inlines : List(Ents.Ent), List(Loc.Seg), List(Ref.Def) -> List(Inl)
+    inlines = |tbl, segs, defs| Inl.project_all(Scan.run(tbl, Loc.joined(segs), defs), segs)
 
-    entry : { task : [NoTask, Todo, Done], blocks : List(Doc) }, List(Ref.Def) -> List(Block)
-    entry = |e, defs|
-        Lower.with_task(List.map(e.blocks, |b| Lower.block(b, defs)), e.task)
+    entry : List(Ents.Ent), { task : [NoTask, Todo, Done], blocks : List(Doc) }, List(Ref.Def) -> List(Block)
+    entry = |tbl, e, defs|
+        Lower.with_task(List.map(e.blocks, |b| Lower.block(tbl, b, defs)), e.task)
 
     ## Put the checkbox back where the marker was — at the head of the entry's
     ## first paragraph.

@@ -11,13 +11,23 @@ import Span exposing [Span]
 import Inl exposing [Inl]
 import Block exposing [Block]
 import Markdown
+import Ents
 import Scan
 
 Test := [].{
+    ## The API under test, built once against the default (HTML5) table. A
+    ## record field holding a function has to be bound before it is called —
+    ## `Md.api.parse(src)` reads as a method call — so each helper binds first.
+    api : Markdown.Api
+    api = Markdown.setup(Markdown.default)
+
     ## Blocks rendered as a compact shape string, so an assertion reads as the
     ## structure it is checking rather than as a wall of constructors.
     shape : Str -> Str
-    shape = |src| Str.join_with(List.map(Markdown.parse(src), Test.tag), "|")
+    shape = |src| {
+        parse = Test.api.parse
+        Str.join_with(List.map(parse(src), Test.tag), "|")
+    }
 
     tag : Block -> Str
     tag = |b|
@@ -55,7 +65,11 @@ Test := [].{
     text = |sp| Str.join_with(List.map(Span.flatten(sp), |s| s.text), "")
 
     html : Str -> Str
-    html = |src| Markdown.to_html(Markdown.parse(src))
+    html = |src| {
+        parse = Test.api.parse
+        to_html = Test.api.to_html
+        to_html(parse(src))
+    }
 }
 
 ## --- paragraph merging -------------------------------------------------------
@@ -118,7 +132,7 @@ expect Test.shape("a *b* c") == "P(a b c)"
 ## An unsafe href keeps its LABEL and loses its href, becoming ordinary text.
 ## This is the only defence against a `javascript:` URL reaching a browser
 ## through `to_html`, so it is asserted on both sides of the package.
-expect Scan.run("[x](javascript:void)", []).len() == 1
+expect Scan.run(Ents.full, "[x](javascript:void)", []).len() == 1
 expect Test.html("[x](javascript:void)") == "<p>x</p>\n"
 expect Test.html("[x](data:text/html,y)") == "<p>x</p>\n"
 expect Test.html("[x](vbscript:y)") == "<p>x</p>\n"

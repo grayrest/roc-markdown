@@ -71,8 +71,8 @@ Stack := [].{
 
     ## ## Entry point
 
-    parse : Str -> List(Doc)
-    parse = |source| {
+    parse : List(Ents.Ent), Str -> List(Doc)
+    parse = |tbl, source| {
         ## A document ending in a newline splits to a trailing empty line that is
         ## the terminator, not a blank line in the document.
         raw = source.split_on("\n")
@@ -81,7 +81,7 @@ Stack := [].{
             _ => raw
         }
         spans = Stack.line_spans(trimmed, 0, [])
-        Stack.finish(List.fold(spans, [Stack.fresh(Root)], |st, l| Stack.line(st, l)))
+        Stack.finish(List.fold(spans, [Stack.fresh(Root)], |st, l| Stack.line(tbl, st, l)))
     }
 
     ## A line with its SOURCE span, tab-expanded for the parser. `off`/`end` are
@@ -118,8 +118,8 @@ Stack := [].{
 
     ## ## One line
 
-    line : List(Stack.Open), Stack.Line -> List(Stack.Open)
-    line = |st, l| {
+    line : List(Ents.Ent), List(Stack.Open), Stack.Line -> List(Stack.Open)
+    line = |tbl, st, l| {
         raw = l.s
         lo = { start: l.off, end: l.end }
         d = Stack.descend(st, 1, raw)
@@ -141,14 +141,14 @@ Stack := [].{
             d.depth
         }
         if all_matched and Stack.raw_leaf(top.kind) {
-            Stack.leaf_line(st, d.rest, blank, lo)
+            Stack.leaf_line(tbl, st, d.rest, blank, lo)
         } else if !all_matched and !blank and Stack.lazy_ok(top.kind) and !Lex.starts_block(d.rest) {
             ## Lazy continuation. The containers did not match, but an open
             ## paragraph claims the line anyway — that IS the rule, and here it
             ## needs no flag because the matching step just told us.
             Stack.push_text(st, Str.trim_start(d.rest), lo)
         } else {
-            Stack.starts(Stack.close_to(st, target), d.rest, blank, lo)
+            Stack.starts(tbl, Stack.close_to(st, target), d.rest, blank, lo)
         }
     }
 
@@ -245,8 +245,8 @@ Stack := [].{
 
     ## ## Raw leaves
 
-    leaf_line : List(Stack.Open), Str, Bool, Loc.Ivl -> List(Stack.Open)
-    leaf_line = |st, rest, blank, lo| {
+    leaf_line : List(Ents.Ent), List(Stack.Open), Str, Bool, Loc.Ivl -> List(Stack.Open)
+    leaf_line = |tbl, st, rest, blank, lo| {
         top = Stack.tip(st)
         match top.kind {
             Fence(f) =>
@@ -272,7 +272,7 @@ Stack := [].{
                     ## the containers matched on the way in, so `rest` has
                     ## already had their prefixes removed and matching it a
                     ## second time would fail against its own entry.
-                    Stack.starts(Stack.pop(st), rest, False, lo)
+                    Stack.starts(tbl, Stack.pop(st), rest, False, lo)
                 }
             RawHtml(ending) =>
                 if ending == "BLANK" and blank {
@@ -291,8 +291,8 @@ Stack := [].{
 
     ## ## New block starts
 
-    starts : List(Stack.Open), Str, Bool, Loc.Ivl -> List(Stack.Open)
-    starts = |raw_st, rest, blank, lo| {
+    starts : List(Ents.Ent), List(Stack.Open), Str, Bool, Loc.Ivl -> List(Stack.Open)
+    starts = |tbl, raw_st, rest, blank, lo| {
         ## An entry has closed and left its list as the tip. Only a new entry
         ## may continue that list; anything else closes it, or the block lands
         ## in `Bullets.kids`, which nothing ever reads, and vanishes.
@@ -316,7 +316,7 @@ Stack := [].{
             info = Str.from_utf8_lossy(List.drop_first(b, n)).trim()
             Stack.push(
                 Stack.mark_content(Stack.close_leaf(st)),
-                Fence({ ch: ch, len: n, indent: ind, lang: Scan.unescape(Ents.decode(Lex.first_word(info))) }),
+                Fence({ ch: ch, len: n, indent: ind, lang: Scan.unescape(Ents.decode(tbl, Lex.first_word(info))) }),
                 [],
                 lo,
             )
@@ -330,7 +330,7 @@ Stack := [].{
                 opened
             }
         } else if ind < 4 and para_open and Lex.setext_level(t) > 0 {
-            Stack.setext(st, Lex.setext_level(t), rest, lo)
+            Stack.setext(tbl, st, Lex.setext_level(t), rest, lo)
         } else if ind < 4 and Lex.is_rule(t) {
             Stack.emit(Stack.mark_content(Stack.close_leaf(st)), Doc.mk(lo, Rule))
         } else if ind < 4 and Stack.atx_level(t) > 0 {
@@ -342,6 +342,7 @@ Stack := [].{
             match Stack.strip_quote(rest) {
                 Ok(inner) =>
                     Stack.starts(
+                        tbl,
                         Stack.push(Stack.mark_content(Stack.close_leaf(st)), Quote, [], lo),
                         inner,
                         Str.is_empty(inner.trim()),
@@ -350,7 +351,7 @@ Stack := [].{
                 Err(_) => Stack.push_para(st, rest, lo)
             }
         } else if ind < 4 and Stack.is_marker(rest, !para_open) {
-            Stack.open_entry(st, rest, lo)
+            Stack.open_entry(tbl, st, rest, lo)
         } else if Stack.rows_open(top.kind) or (ind < 4 and t.starts_with("|")) {
             Stack.push_rows(st, rest, lo)
         } else {
@@ -494,13 +495,13 @@ Stack := [].{
     ## The paragraph above a `===` or `---` becomes a heading. It reaches BACK
     ## into what is already buffered, which is why it cannot be an ordinary
     ## block start.
-    setext : List(Stack.Open), U8, Str, Loc.Ivl -> List(Stack.Open)
-    setext = |st, lvl, under, lo| {
+    setext : List(Ents.Ent), List(Stack.Open), U8, Str, Loc.Ivl -> List(Stack.Open)
+    setext = |tbl, st, lvl, under, lo| {
         top = Stack.tip(st)
         ## Leading definitions are not heading content. They stay behind as a
         ## paragraph of their own so phase 2 still collects them — dropping them
         ## here would lose the definition along with the text.
-        n = Defs.lead_lines(List.map(top.text, |g| g.text), 0)
+        n = Defs.lead_lines(tbl, List.map(top.text, |g| g.text), 0)
         lead = List.sublist(top.text, { start: 0, len: n })
         kept = List.drop_first(top.text, n)
         base = Stack.pop_discard(st)
@@ -530,19 +531,19 @@ Stack := [].{
             _ => True
         }
 
-    open_entry : List(Stack.Open), Str, Loc.Ivl -> List(Stack.Open)
-    open_entry = |st, rest, lo| {
+    open_entry : List(Ents.Ent), List(Stack.Open), Str, Loc.Ivl -> List(Stack.Open)
+    open_entry = |tbl, st, rest, lo| {
         top = Stack.tip(st)
         para_open = Stack.lazy_ok(top.kind) and !List.is_empty(top.text)
         match Lex.marker_here(rest, !para_open) {
-            Bullet(col, _h) => Stack.open_entry_at(st, col, False, 1, Lex.marker_char(rest.trim()), Lex.entry_head(rest, col), lo)
-            Numbered(col, num, _h) => Stack.open_entry_at(st, col, True, num, Lex.marker_char(rest.trim()), Lex.entry_head(rest, col), lo)
+            Bullet(col, _h) => Stack.open_entry_at(tbl, st, col, False, 1, Lex.marker_char(rest.trim()), Lex.entry_head(rest, col), lo)
+            Numbered(col, num, _h) => Stack.open_entry_at(tbl, st, col, True, num, Lex.marker_char(rest.trim()), Lex.entry_head(rest, col), lo)
             NotList => Stack.push_para(st, rest, lo)
         }
     }
 
-    open_entry_at : List(Stack.Open), U64, Bool, U64, Str, Str, Loc.Ivl -> List(Stack.Open)
-    open_entry_at = |st, col, ord, num, ch, head, lo| {
+    open_entry_at : List(Ents.Ent), List(Stack.Open), U64, Bool, U64, Str, Str, Loc.Ivl -> List(Stack.Open)
+    open_entry_at = |tbl, st, col, ord, num, ch, head, lo| {
         closed = Stack.close_leaf(st)
         ## The tip is a `Bullets` only when this line's own entry already failed
         ## to match and was closed — i.e. this is a SIBLING. If the tip is still
@@ -573,7 +574,7 @@ Stack := [].{
         if Str.is_empty(task.rest.trim()) {
             with_entry
         } else {
-            Stack.starts(with_entry, task.rest, False, lo)
+            Stack.starts(tbl, with_entry, task.rest, False, lo)
         }
     }
 

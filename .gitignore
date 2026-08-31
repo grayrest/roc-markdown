@@ -13,3 +13,10 @@
 
 # report.py imports generate.py.
 __pycache__/
+
+# The wasm size harness's build products. `wasm/build.sh` regenerates all of
+# them; only the sources are worth committing.
+/wasm/build/
+/wasm/glue-out/
+/wasm/platform/targets/
+/wasm/host/roc_platform_abi.rs

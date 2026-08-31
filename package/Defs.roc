@@ -13,10 +13,10 @@ import Ents
 
 Defs := [].{
     ## How many lines, from the front, are link reference definitions.
-    lead_lines : List(Str), U64 -> U64
-    lead_lines = |lines, n|
-        match Defs.def_at(lines) {
-            Ok(d) => Defs.lead_lines(List.drop_first(lines, d.used), n + d.used)
+    lead_lines : List(Ents.Ent), List(Str), U64 -> U64
+    lead_lines = |tbl, lines, n|
+        match Defs.def_at(tbl, lines) {
+            Ok(d) => Defs.lead_lines(tbl, List.drop_first(lines, d.used), n + d.used)
             Err(_) => n
         }
 
@@ -29,8 +29,8 @@ Defs := [].{
     ##
     ## The run stops at the first blank line — a definition cannot contain one —
     ## which is what keeps this from scanning the whole document per candidate.
-    def_at : List(Str) -> Try({ def : Ref.Def, used : U64 }, [NotDef])
-    def_at = |lines| {
+    def_at : List(Ents.Ent), List(Str) -> Try({ def : Ref.Def, used : U64 }, [NotDef])
+    def_at = |tbl, lines| {
         run = Defs.until_blank(lines, [])
         joined = Str.join_with(run, "\n")
         b = Str.to_utf8(joined)
@@ -77,9 +77,9 @@ Defs := [].{
                             Ok({
                                 def: {
                                     label: Scan.fold_label(label),
-                                    dest: Scan.unescape(Ents.decode(parts.dest)),
+                                    dest: Scan.unescape(Ents.decode(tbl, parts.dest)),
                                     title: if keep_title {
-                                        Scan.unescape(Ents.decode(title.text))
+                                        Scan.unescape(Ents.decode(tbl, title.text))
                                     } else {
                                         ""
                                     },

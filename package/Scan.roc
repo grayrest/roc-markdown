@@ -24,7 +24,10 @@ Scan := [].{
     ## deliberately keep taking a plain `List(U8)`. They are called on labels,
     ## destinations and titles as well as on the scan buffer, and by `Lex` on
     ## lines that have no context at all.
-    Ctx : { b : List(U8), defs : List(Ref.Def) }
+    ## `tbl` is the entity table `Markdown.setup` chose. It sits on `Ctx`
+    ## rather than becoming a parameter of its own because every function that
+    ## needs it already carries one — the cheapest place to thread it.
+    Ctx : { b : List(U8), defs : List(Ref.Def), tbl : List(Ents.Ent) }
 
     ## The pending literal text, carrying the SOURCE offset it began at (T0b).
     ## The offset rides WITH the buffer so a finished `Text` node knows its
@@ -43,8 +46,8 @@ Scan := [].{
     push_all : Scan.Buf, List(U8) -> Scan.Buf
     push_all = |buf, xs| { ..buf, bytes: List.concat(buf.bytes, xs) }
 
-    run : Str, List(Ref.Def) -> List(Inl)
-    run = |s, defs| Scan.emphasis(Scan.tokens({ b: Str.to_utf8(s), defs: defs }, 0, Scan.buf0(0), []))
+    run : List(Ents.Ent), Str, List(Ref.Def) -> List(Inl)
+    run = |tbl, s, defs| Scan.emphasis(Scan.tokens({ b: Str.to_utf8(s), defs: defs, tbl: tbl }, 0, Scan.buf0(0), []))
 
     ## --- character classes ---------------------------------------------------
     ##
@@ -514,8 +517,8 @@ Scan := [].{
                 } else if Scan.at(ctx.b, close + 1) == 40 {
                     match Scan.match_paren(ctx.b, close + 2, 1) {
                         Ok(pclose) => {
-                            label = Inl.shift_all(Scan.run(Scan.slice(ctx.b, i + skip, close), ctx.defs), i + skip, close)
-                            parts = Scan.dest_title(Scan.slice(ctx.b, close + 2, pclose))
+                            label = Inl.shift_all(Scan.run(ctx.tbl, Scan.slice(ctx.b, i + skip, close), ctx.defs), i + skip, close)
+                            parts = Scan.dest_title(ctx.tbl, Scan.slice(ctx.b, close + 2, pclose))
                             ## A link may not contain a link, so the outer
                             ## bracket re-scans as literal text — which keeps
                             ## the brackets AND the inner link, where emitting
@@ -547,7 +550,7 @@ Scan := [].{
     resolve = |ctx, i, skip, close, resume, key, buf, out, image|
         match Scan.lookup(ctx.defs, Scan.fold_label(key)) {
             Ok(d) => {
-                label = Inl.shift_all(Scan.run(Scan.slice(ctx.b, i + skip, close), ctx.defs), i + skip, close)
+                label = Inl.shift_all(Scan.run(ctx.tbl, Scan.slice(ctx.b, i + skip, close), ctx.defs), i + skip, close)
                 if !image and Scan.has_link(label) {
                     Scan.literal(ctx, i, skip, buf, out)
                 } else {
@@ -764,8 +767,8 @@ Scan := [].{
     ## A BARE destination may not contain a space — `[link](/my uri)` is not a
     ## link, it is text — while an angle-bracketed one may, and may be empty.
     ## Splitting on the first space before deciding got both of those wrong.
-    dest_title : Str -> { dest : Str, title : Str, ok : Bool }
-    dest_title = |raw| {
+    dest_title : List(Ents.Ent), Str -> { dest : Str, title : Str, ok : Bool }
+    dest_title = |tbl, raw| {
         t = raw.trim()
         if t.starts_with("<") {
             tb = Str.to_utf8(t)
@@ -775,8 +778,8 @@ Scan := [].{
                 Ok(gt) => {
                     inner = Scan.slice(tb, 1, gt)
                     {
-                        dest: Scan.unescape(Ents.decode(inner)),
-                        title: Scan.unescape(Ents.decode(Scan.unquote(Scan.slice(tb, gt + 1, List.len(tb)).trim()))),
+                        dest: Scan.unescape(Ents.decode(tbl, inner)),
+                        title: Scan.unescape(Ents.decode(tbl, Scan.unquote(Scan.slice(tb, gt + 1, List.len(tb)).trim()))),
                         ## Whatever follows the closing `>` must be a title or
                         ## nothing — `[a](<b>c)` is text, not a link to `b`
                         ## titled `c`.
@@ -795,15 +798,15 @@ Scan := [].{
                 Ok(p) => {
                     rest = p.after.trim()
                     {
-                        dest: Scan.unescape(Ents.decode(p.before)),
-                        title: Scan.unescape(Ents.decode(Scan.unquote(rest))),
+                        dest: Scan.unescape(Ents.decode(tbl, p.before)),
+                        title: Scan.unescape(Ents.decode(tbl, Scan.unquote(rest))),
                         ## Whatever follows the destination must be a quoted
                         ## title; anything else means the space was inside a
                         ## destination that is not allowed to hold one.
                         ok: Scan.is_quoted(rest),
                     }
                 }
-                Err(_) => { dest: Scan.unescape(Ents.decode(t)), title: "", ok: !t.contains("\n") }
+                Err(_) => { dest: Scan.unescape(Ents.decode(tbl, t)), title: "", ok: !t.contains("\n") }
             }
         }
     }
@@ -1135,7 +1138,7 @@ Scan := [].{
     entity = |ctx, i, buf, out|
         match Scan.find_byte(ctx.b, i + 1, 59) {
             Ok(close) =>
-                match Ents.lookup(Scan.slice(ctx.b, i + 1, close)) {
+                match Ents.lookup(ctx.tbl, Scan.slice(ctx.b, i + 1, close)) {
                     Ok(ch) => Scan.tokens(ctx, close + 1, Scan.push_all(buf, Str.to_utf8(ch)), out)
                     Err(_) => Scan.tokens(ctx, i + 1, Scan.push(buf, 38), out)
                 }

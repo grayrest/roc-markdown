@@ -59,39 +59,78 @@ opt-in.
 Aside from inline HTML, hrefs are filtered by `Scan.safe_href`, which refuses
 `javascript:`, `data:` and `vbscript:` and allows everything else.
 
-## Build size: The entity table is the one large constant
+## Build size: the entity table is chosen by the caller
 
 As a fully compliant native parser, this package isn't particularly small
 as a WASM module but there is an easy size win. Markdown allows for the
 use of the full set of 2125 HTML5 named entities, which most people do
-not use. Swapping the entity table over to the five named XML entities
-(`&amp;` `&lt;` `&gt;` `&quot;` `&apos;`) saves 55k.
+not use. Asking for the five predefined XML entities (`&amp;` `&lt;`
+`&gt;` `&quot;` `&apos;`) instead saves 45k.
 
-Every lookup in the package reads `Ents.table`, which is one line of
-`package/Ents.roc`:
-
-```roc
-table : List(Ents.Ent)
-table = Ents.full        # the 2,125 HTML5 names — edit to Ents.minimal
-```
+The choice is a parameter — `Markdown.setup({ entity_table: Xml })` — and the
+API it returns carries the table to every lookup. **The compiler drops the table
+you did not ask for**, provided the choice is a literal at the call:
 
 | | total | code | data |
 |---|---:|---:|---:|
-| `table = Ents.full` | 840,932 | 643,820 | 111,583 |
-| `table = Ents.minimal` | 786,682 | 645,180 | 55,973 |
+| `setup(default)` — Html5 | 830,875 | 633,687 | 111,649 |
+| `setup({ entity_table: Xml })` | 775,265 | 633,685 | 56,042 |
+| choice taken from a runtime value | 831,037 | 633,717 | 111,781 |
 
-**−54,250 B**, essentially all of it data.
+**−55,610 B** for asking for `Xml`, all of it data. The third row is the
+control: when the table is picked from a value the compiler cannot see, both
+tables are retained (its data is the other two rows' tables plus the base), so
+the win in row two is genuine dead-code elimination and not a measurement
+artefact.
 
-Roc does not currently have any facilities for configuring this at build
-time so it's a source edit.
+### What the parameter costs
+
+This used to be a source edit — a `table = Ents.full` constant in `Ents.roc`
+that a build changed by hand. Against that baseline, measured with a
+structurally identical harness:
+
+| | total | code | data |
+|---|---:|---:|---:|
+| `table = Ents.full` (was) | 820,934 | 623,740 | 111,654 |
+| `table = Ents.minimal` (was) | 766,742 | 625,155 | 56,047 |
+
+Threading the table costs **about 10 KB of code** — 633,687 against 623,740 for
+the HTML5 build. Dropping the table saves 55 KB, so the parameter is a net win
+of roughly 45 KB over shipping the default, and lands within 8.5 KB of what the
+hand edit achieved while requiring nobody to edit this repo to get it.
+
+The earlier reasoning that "the code cost most of what dropping the table saved"
+was directionally right and wrong on magnitude: the cost is real, and it is a
+fifth of the saving.
+
+Reproduce with `just wasm-size main`, `just wasm-size xml`, `just wasm-size dyn`.
+The harness lives in `wasm/` — the smallest platform that will link, so what the
+module weighs is this package plus a rounding error. **It needs a compiler older
+than `release-fast-c32a5bac`**; the wasm backend regressed after
+`release-fast-cb55b063` and newer builds emit an empty 26-byte module while
+reporting success. See the `wasm_roc` note in the `Justfile`.
 
 ## API
 
+`Markdown.setup` takes the options and returns the API closed over them:
+
+```roc
+md = Markdown.setup(Markdown.default)          # or { ..Markdown.default, entity_table: Xml }
+parse = md.parse
+blocks = parse(source)
+```
+
 | | |
 |---|---|
-| `parse : Str -> List(Block)` | Markdown in, blocks out. |
-| `to_html : List(Block) -> Str` | Semantic HTML. Raw HTML becomes a placeholder comment. |
-| `to_html_unsafe : List(Block) -> Str` | Semantic HTML, raw HTML verbatim. |
+| `setup : Options -> Api` | The API, closed over an entity table. |
+| `default : Options` | `{ entity_table: Html5 }`. |
+| `Api.parse : Str -> List(Block)` | Markdown in, blocks out. |
+| `Api.to_html : List(Block) -> Str` | Semantic HTML. Raw HTML becomes a placeholder comment. |
+| `Api.to_html_unsafe : List(Block) -> Str` | Semantic HTML, raw HTML verbatim. |
+
+**Bind a field before calling it.** `md.parse(source)` reads as a method call and
+the compiler reports that the record has no such method; `parse = md.parse`
+followed by `parse(source)` is the working form.
 
 Four exposed types:
 
@@ -106,7 +145,7 @@ Four exposed types:
 - **`Span`** — that tree lowered to flat styled runs (`text`, `bold`, `italic`,
   `code`, `link`), via `Span.flatten`. Lossy for structure, lossless for
   rendering, and the shape a text shaper actually wants.
-- **`Ents`** — the entity tables, and the `table` line that picks one. See above.
+- **`Ents`** — the two entity tables, `full` and `minimal`, that `setup` picks between. See above.
 
 ## Layout
 

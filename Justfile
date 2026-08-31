@@ -35,3 +35,21 @@ check: test check-examples
 # API docs for the exposed modules.
 docs:
     "{{ roc }}" docs package/main.roc
+
+# The compiler the wasm harness uses.
+#
+# NOT `roc`: the wasm backend regressed between `release-fast-cb55b063` (Aug 23)
+# and `release-fast-c32a5bac` (Aug 25) — newer builds report success and emit a
+# 26-byte module holding nothing but a memory section. Verified by building the
+# UNMODIFIED upstream gate-zero rig, which produces a real module on cb55b063
+# and 26 bytes on every build after it. `cb55b063` is the newest one that works.
+wasm_roc := env("WASM_ROC", home_directory() / ".bin/roc-cb55b0")
+
+# Build the package to wasm and report its section sizes — the numbers behind
+# the README's "Build size" table. Pass a variant: main (Html5), xml, dyn.
+wasm-size variant="main":
+    ROC="{{ wasm_roc }}" bash wasm/build.sh
+    "{{ wasm_roc }}" build --target=wasm32 --no-cache wasm/app/{{ variant }}.roc
+    @mv -f {{ variant }}.wasm wasm/build/{{ variant }}.wasm
+    @printf 'variant\ttotal\tcode\tdata\n'
+    @python3 wasm/sections.py wasm/build/{{ variant }}.wasm {{ variant }}
