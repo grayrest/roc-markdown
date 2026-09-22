@@ -309,3 +309,11 @@ expect Test.html("a_b_c@x") == "<p>a_b_c@x</p>\n"
 expect Test.tree("a* a* *b*") == "a* a* E[b]"
 ## should_pair_each_of_many_sequential_emphases
 expect Test.tree("*a* *b* **c**") == "E[a] E[b] S[c]"
+
+## --- a long paragraph ----------------------------------------------------------
+##
+## Every token but plain text and delimiters went through a helper that called
+## back into the scanner, so the stack grew by a frame per token and a
+## paragraph of about 6k lines (or links, or escapes) overflowed it.
+## should_scan_a_twenty_thousand_line_paragraph
+expect Test.shape(Str.repeat("a\n", 20000)) == "P(${Str.repeat("a ", 19999)}a)"

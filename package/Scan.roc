@@ -240,6 +240,14 @@ Scan := [].{
     ## `buf` is the pending literal text, flushed whenever a token interrupts it.
     ## Accumulating bytes and flushing once is what keeps this O(n): appending to
     ## the output per character would rebuild the node list on every byte.
+    ##
+    ## The helpers each return a `Step` — where to carry on — and every branch
+    ## here ends in a call to `tokens` itself, which is a loop. They used to
+    ## call `tokens` themselves: mutual recursion is not a loop, so each token
+    ## they handled cost a stack frame, and a paragraph of about 6k lines, links
+    ## or escapes overflowed the 8 MB stack.
+    Step : { i : U64, buf : Scan.Buf, out : List(Scan.Tk) }
+
     tokens : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> List(Scan.Tk)
     tokens = |ctx, i, buf, out|
         if i >= ctx.end {
@@ -247,13 +255,17 @@ Scan := [].{
         } else {
             c = Scan.at(ctx.b, i)
             if c == 92 {
-                Scan.backslash(ctx, i, buf, out)
+                st = Scan.backslash(ctx, i, buf, out)
+                Scan.tokens(ctx, st.i, st.buf, st.out)
             } else if c == 96 {
-                Scan.code_span(ctx, i, buf, out)
+                st = Scan.code_span(ctx, i, buf, out)
+                Scan.tokens(ctx, st.i, st.buf, st.out)
             } else if c == 10 {
-                Scan.newline(ctx, i, buf, out)
+                st = Scan.newline(i, buf, out)
+                Scan.tokens(ctx, st.i, st.buf, st.out)
             } else if (c == 104 or c == 119 or c == 102) and Scan.at_boundary(ctx.b, i) and Scan.bare_len(ctx.b, i) > 0 {
-                Scan.bare_link(ctx, i, buf, out)
+                st = Scan.bare_link(ctx, i, buf, out)
+                Scan.tokens(ctx, st.i, st.buf, st.out)
             } else if i >= ctx.email_dead and Scan.at_boundary(ctx.b, i) {
                 ## An email is found at its START, like a bare URL. Backing up
                 ## from the `@` looked simpler and could not work: an `_` in the
@@ -277,13 +289,17 @@ Scan := [].{
                     Scan.tokens({ ..ctx, email_dead: i + Scan.max_u64(e.local, 1) }, i, buf, out)
                 }
             } else if c == 38 {
-                Scan.entity(ctx, i, buf, out)
+                st = Scan.entity(ctx, i, buf, out)
+                Scan.tokens(ctx, st.i, st.buf, st.out)
             } else if c == 60 {
-                Scan.angle(ctx, i, buf, out)
+                st = Scan.angle(ctx, i, buf, out)
+                Scan.tokens(ctx, st.i, st.buf, st.out)
             } else if c == 91 {
-                Scan.bracket(ctx, i, 1, buf, out, False)
+                st = Scan.bracket(ctx, i, 1, buf, out, False)
+                Scan.tokens(ctx, st.i, st.buf, st.out)
             } else if c == 33 and Scan.at(ctx.b, i + 1) == 91 {
-                Scan.bracket(ctx, i, 2, buf, out, True)
+                st = Scan.bracket(ctx, i, 2, buf, out, True)
+                Scan.tokens(ctx, st.i, st.buf, st.out)
             } else if c == 42 or c == 95 or c == 126 {
                 n = Scan.run_len(ctx.b, i, c, 0)
                 flags = Scan.flanking(ctx.b, i, n, c)
@@ -307,15 +323,15 @@ Scan := [].{
     ## `\` before ASCII punctuation is that character, literally. `\` before a
     ## newline is a hard break. `\` before anything else is a literal backslash —
     ## which is why this cannot be a blanket "skip the next byte".
-    backslash : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> List(Scan.Tk)
+    backslash : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> Scan.Step
     backslash = |ctx, i, buf, out| {
         nxt = Scan.at(ctx.b, i + 1)
         if nxt == 10 and i + 1 < List.len(ctx.b) {
-            Scan.tokens(ctx, i + 2, Scan.buf0(i + 2), List.append(Scan.flush(buf, i, out), Node(Inl.at(i, i + 2, HardBreak))))
+            { i: i + 2, buf: Scan.buf0(i + 2), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, i + 2, HardBreak))) }
         } else if Scan.is_punct(nxt) and i + 1 < List.len(ctx.b) {
-            Scan.tokens(ctx, i + 2, Scan.push(buf, nxt), out)
+            { i: i + 2, buf: Scan.push(buf, nxt), out: out }
         } else {
-            Scan.tokens(ctx, i + 1, Scan.push(buf, 92), out)
+            { i: i + 1, buf: Scan.push(buf, 92), out: out }
         }
     }
 
@@ -326,7 +342,7 @@ Scan := [].{
     ##
     ## An opener with no matching closer is literal text, so the backticks are
     ## emitted and scanning resumes after them.
-    code_span : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> List(Scan.Tk)
+    code_span : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> Scan.Step
     code_span = |ctx, i, buf, out| {
         n = Scan.run_len(ctx.b, i, 96, 0)
         found = if Scan.tick_run_after(ctx, i + n, n) {
@@ -337,9 +353,9 @@ Scan := [].{
         match found {
             Ok(close) => {
                 raw = Scan.slice(ctx.b, i + n, close)
-                Scan.tokens(ctx, close + n, Scan.buf0(close + n), List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + n, Code(Scan.strip_code(raw))))))
+                { i: close + n, buf: Scan.buf0(close + n), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + n, Code(Scan.strip_code(raw))))) }
             }
-            Err(_) => Scan.tokens(ctx, i + n, Scan.push_all(buf, List.repeat(96, n)), out)
+            Err(_) => { i: i + n, buf: Scan.push_all(buf, List.repeat(96, n)), out: out }
         }
     }
 
@@ -380,8 +396,8 @@ Scan := [].{
     ## Two or more trailing spaces before a newline is a hard break; otherwise
     ## the newline is soft. Trailing spaces are dropped either way, so a line
     ## ending never contributes text.
-    newline : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> List(Scan.Tk)
-    newline = |ctx, i, buf, out| {
+    newline : U64, Scan.Buf, List(Scan.Tk) -> Scan.Step
+    newline = |i, buf, out| {
         trimmed_bytes = Scan.drop_trailing_spaces(buf.bytes)
         dropped = List.len(buf.bytes) - List.len(trimmed_bytes)
         text_end = i - dropped
@@ -393,7 +409,7 @@ Scan := [].{
         } else {
             Node(Inl.at(text_end, i + 1, SoftBreak))
         }
-        Scan.tokens(ctx, i + 1, Scan.buf0(i + 1), List.append(Scan.flush(trimmed, text_end, out), node))
+        { i: i + 1, buf: Scan.buf0(i + 1), out: List.append(Scan.flush(trimmed, text_end, out), node) }
     }
 
     drop_trailing_spaces : List(U8) -> List(U8)
@@ -624,7 +640,7 @@ Scan := [].{
     ## splices them back as text. Scanning it up front and again on the way to
     ## a literal made nested brackets exponential — each level scanned its label
     ## twice, so `[[[…a](u)…](u)](u)` doubled in cost per level.
-    bracket : Scan.Ctx, U64, U64, Scan.Buf, List(Scan.Tk), Bool -> List(Scan.Tk)
+    bracket : Scan.Ctx, U64, U64, Scan.Buf, List(Scan.Tk), Bool -> Scan.Step
     bracket = |ctx, i, skip, buf, out, image|
         match Scan.close_of(ctx, i + skip) {
             Ok(close) =>
@@ -683,7 +699,7 @@ Scan := [].{
     ##
     ## `resume` is where scanning continues — past the second bracket for a full
     ## reference, past the first for a shortcut — so one function serves both.
-    resolve : Scan.Ctx, U64, U64, U64, U64, Str, Scan.Buf, List(Scan.Tk), Bool -> List(Scan.Tk)
+    resolve : Scan.Ctx, U64, U64, U64, U64, Str, Scan.Buf, List(Scan.Tk), Bool -> Scan.Step
     resolve = |ctx, i, skip, close, resume, key, buf, out, image|
         match Scan.lookup(ctx.defs, Scan.fold_label(key)) {
             Ok(d) => Scan.settle(ctx, i, skip, close, resume, { dest: d.dest, title: d.title, ok: True }, buf, out, image)
@@ -705,16 +721,16 @@ Scan := [].{
     ## link whose destination does): the label was not a label after all. The
     ## tokens are still DELIMITERS, not finished emphasis, so a `*` inside the
     ## label can still pair with one outside it.
-    settle : Scan.Ctx, U64, U64, U64, U64, { dest : Str, title : Str, ok : Bool }, Scan.Buf, List(Scan.Tk), Bool -> List(Scan.Tk)
+    settle : Scan.Ctx, U64, U64, U64, U64, { dest : Str, title : Str, ok : Bool }, Scan.Buf, List(Scan.Tk), Bool -> Scan.Step
     settle = |ctx, i, skip, close, resume, parts, buf, out, image| {
         label = Scan.tokens({ ..ctx, end: close }, i + skip, Scan.buf0(i + skip), [])
         stop = Scan.tks_end(label, i + skip)
         if stop > close or (!image and Scan.tks_have_link(label)) {
             opener = Scan.push_all(buf, List.sublist(ctx.b, { start: i, len: skip }))
-            Scan.tokens(ctx, stop, Scan.buf0(stop), List.concat(Scan.flush(opener, i + skip, out), label))
+            { i: stop, buf: Scan.buf0(stop), out: List.concat(Scan.flush(opener, i + skip, out), label) }
         } else {
             nodes = Scan.link_node(i, resume, Scan.emphasis(label), parts, image)
-            Scan.tokens(ctx, resume, Scan.buf0(resume), List.concat(Scan.flush(buf, i, out), nodes))
+            { i: resume, buf: Scan.buf0(resume), out: List.concat(Scan.flush(buf, i, out), nodes) }
         }
     }
 
@@ -864,9 +880,9 @@ Scan := [].{
             List.map(label, |n| Node(n))
         }
 
-    literal : Scan.Ctx, U64, U64, Scan.Buf, List(Scan.Tk) -> List(Scan.Tk)
+    literal : Scan.Ctx, U64, U64, Scan.Buf, List(Scan.Tk) -> Scan.Step
     literal = |ctx, i, skip, buf, out|
-        Scan.tokens(ctx, i + skip, Scan.push_all(buf, List.sublist(ctx.b, { start: i, len: skip })), out)
+        { i: i + skip, buf: Scan.push_all(buf, List.sublist(ctx.b, { start: i, len: skip })), out: out }
 
     match_bracket : List(U8), U64, U64 -> Try(U64, [NotFound])
     match_bracket = |b, i, depth|
@@ -1106,39 +1122,39 @@ Scan := [].{
     ## `<https://x>` and `<a@ctx.b.c>` become links to themselves. Anything else in
     ## angle brackets is left literal — raw HTML is a separate decision and this
     ## package does not pass it through.
-    angle : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> List(Scan.Tk)
+    angle : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> Scan.Step
     angle = |ctx, i, buf, out|
         if i + 1 >= ctx.gt_end {
             ## No `>` anywhere after this, so nothing here can close.
-            Scan.tokens(ctx, i + 1, Scan.push(buf, 60), out)
+            { i: i + 1, buf: Scan.push(buf, 60), out: out }
         } else if Scan.starts(ctx.b, i, "<![CDATA[") {
             ## CDATA ends at `]]>`, and its body may contain `>` — searching for
             ## the first one cut it in half.
             match Scan.find_cdata(ctx.b, i + 9) {
                 Ok(close) =>
-                    Scan.tokens(ctx, close + 3, Scan.buf0(close + 3), List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 3, Raw(Scan.slice(ctx.b, i, close + 3))))))
-                Err(_) => Scan.tokens(ctx, i + 1, Scan.push(buf, 60), out)
+                    { i: close + 3, buf: Scan.buf0(close + 3), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 3, Raw(Scan.slice(ctx.b, i, close + 3))))) }
+                Err(_) => { i: i + 1, buf: Scan.push(buf, 60), out: out }
             }
         } else
         match Scan.find_tag_end(ctx.b, i + 1) {
             Ok(close) => {
                 inner = Scan.slice(ctx.b, i + 1, close)
                 if Scan.is_autolink(inner) and Scan.safe_href(inner) {
-                    Scan.tokens(ctx, close + 1, Scan.buf0(close + 1), List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 1, Link({ href: inner, title: "", kids: [Inl.at(i + 1, close, Text(inner))] })))))
+                    { i: close + 1, buf: Scan.buf0(close + 1), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 1, Link({ href: inner, title: "", kids: [Inl.at(i + 1, close, Text(inner))] })))) }
                 } else if Scan.is_email(inner) {
-                    Scan.tokens(ctx, close + 1, Scan.buf0(close + 1), List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 1, Link({ href: "mailto:${inner}", title: "", kids: [Inl.at(i + 1, close, Text(inner))] })))))
+                    { i: close + 1, buf: Scan.buf0(close + 1), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 1, Link({ href: "mailto:${inner}", title: "", kids: [Inl.at(i + 1, close, Text(inner))] })))) }
                 } else if Scan.is_tag(inner) {
                     ## Raw inline HTML. It is carried, not dropped and not
                     ## escaped here — what happens to it is the LOWERING's
                     ## decision, and the two lowerings disagree: `to_html`
                     ## passes it through (or omits it, when safe), while a
                     ## native renderer has no HTML engine and shows it as text.
-                    Scan.tokens(ctx, close + 1, Scan.buf0(close + 1), List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 1, Raw("<${inner}>")))))
+                    { i: close + 1, buf: Scan.buf0(close + 1), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 1, Raw("<${inner}>")))) }
                 } else {
-                    Scan.tokens(ctx, i + 1, Scan.push(buf, 60), out)
+                    { i: i + 1, buf: Scan.push(buf, 60), out: out }
                 }
             }
-            Err(_) => Scan.tokens(ctx, i + 1, Scan.push(buf, 60), out)
+            Err(_) => { i: i + 1, buf: Scan.push(buf, 60), out: out }
         }
 
     ## --- GFM extended autolinks -------------------------------------------
@@ -1239,7 +1255,7 @@ Scan := [].{
     count_byte = |b, i, n, c|
         List.len(List.keep_if(List.sublist(b, { start: i, len: n }), |x| x == c))
 
-    bare_link : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> List(Scan.Tk)
+    bare_link : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> Scan.Step
     bare_link = |ctx, i, buf, out| {
         n = Scan.bare_len(ctx.b, i)
         text = Scan.slice(ctx.b, i, i + n)
@@ -1249,7 +1265,7 @@ Scan := [].{
             text
         }
         node = Node(Inl.at(i, i + n, Link({ href: href, title: "", kids: [Inl.at(i, i + n, Text(text))] })))
-        Scan.tokens(ctx, i + n, Scan.buf0(i + n), List.append(Scan.flush(buf, i, out), node))
+        { i: i + n, buf: Scan.buf0(i + n), out: List.append(Scan.flush(buf, i, out), node) }
     }
 
     ## The length of an email starting here (`len`, 0 for none), and how far
@@ -1327,15 +1343,15 @@ Scan := [].{
     ## The `;` is looked for no further than the longest name could reach. An
     ## unbounded search ran to the end of the text for every `&` without one,
     ## so a paragraph of `&`s was quadratic.
-    entity : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> List(Scan.Tk)
+    entity : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> Scan.Step
     entity = |ctx, i, buf, out|
         match Ents.semi_within(ctx.b, i + 1) {
             Ok(close) =>
                 match Ents.lookup(Scan.slice(ctx.b, i + 1, close)) {
-                    Ok(ch) => Scan.tokens(ctx, close + 1, Scan.push_all(buf, Str.to_utf8(ch)), out)
-                    Err(_) => Scan.tokens(ctx, i + 1, Scan.push(buf, 38), out)
+                    Ok(ch) => { i: close + 1, buf: Scan.push_all(buf, Str.to_utf8(ch)), out: out }
+                    Err(_) => { i: i + 1, buf: Scan.push(buf, 38), out: out }
                 }
-            Err(_) => Scan.tokens(ctx, i + 1, Scan.push(buf, 38), out)
+            Err(_) => { i: i + 1, buf: Scan.push(buf, 38), out: out }
         }
 
     ## An autolink is an ABSOLUTE URI — a scheme, then a colon — never a
