@@ -325,19 +325,6 @@ Lex := [].{
             Str.drop_first_bytes(raw, col).ok_or("")
         }
 
-    ## One `>` and at most one space after it. NOT trimmed: the content of a
-    ## quote is markdown, so its own indentation decides its structure, and
-    ## trimming flattened every nested construct inside one.
-    strip_marker : Str -> Str
-    strip_marker = |t| {
-        rest = t.drop_prefix(">")
-        if rest.starts_with(" ") {
-            rest.drop_prefix(" ")
-        } else {
-            rest
-        }
-    }
-
     task_of : Str -> { state : [NoTask, Todo, Done], rest : Str }
     task_of = |rest| {
         low = Str.with_ascii_lowercased(rest)

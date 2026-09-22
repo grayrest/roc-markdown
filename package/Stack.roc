@@ -576,14 +576,6 @@ Stack := [].{
         }
     }
 
-    ## The open list directly enclosing the open entry, if there is one.
-    tip_kind_below_entry : List(Stack.Open) -> Stack.Kind
-    tip_kind_below_entry = |st|
-        match Stack.tip(st).kind {
-            Entry(_) => Stack.kind_at(st, List.len(st) - 2)
-            other => other
-        }
-
     list_matches : Stack.Kind, Bool, Str -> Bool
     list_matches = |k, ord, ch|
         match k {
@@ -607,21 +599,6 @@ Stack := [].{
             Stack.pop(st)
         } else {
             st
-        }
-
-    close_entry_only : List(Stack.Open) -> List(Stack.Open)
-    close_entry_only = |st|
-        match Stack.tip(st).kind {
-            Entry(_) => Stack.pop(st)
-            _ => st
-        }
-
-    close_lists : List(Stack.Open) -> List(Stack.Open)
-    close_lists = |st|
-        match Stack.tip(st).kind {
-            Entry(_) => Stack.close_lists(Stack.pop(st))
-            Bullets(_) => Stack.close_lists(Stack.pop(st))
-            _ => st
         }
 
     ## Pop the tip, turn it into a `Doc`, and append it to the new tip.

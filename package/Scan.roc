@@ -207,17 +207,6 @@ Scan := [].{
     ## `to - from` is a U64 subtraction, so an empty or inverted range has to be
     ## answered before it is computed. Every caller that got this wrong produced
     ## an "Integer subtraction overflowed" crash a long way from the cause.
-    ## The same range as `slice`, without the conversion. `List.sublist` is a
-    ## seamless slice — it shares the source allocation and copies nothing —
-    ## which is what makes an inline leaf free to build.
-    bytes : List(U8), U64, U64 -> List(U8)
-    bytes = |b, from, to|
-        if to <= from {
-            []
-        } else {
-            List.sublist(b, { start: from, len: to - from })
-        }
-
     slice : List(U8), U64, U64 -> Str
     slice = |b, from, to|
         if to <= from {
@@ -1099,14 +1088,6 @@ Scan := [].{
             pair and !Scan.has_bare(b, 1, n - 1, close)
         }
     }
-
-    unangle : Str -> Str
-    unangle = |d|
-        if d.starts_with("<") and d.ends_with(">") {
-            Str.drop_suffix(d.drop_prefix("<"), ">")
-        } else {
-            d
-        }
 
     ## The length test is not redundant: a lone `"` both starts and ends with a
     ## quote, and stripping one character off each end of a one-character string
