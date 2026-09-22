@@ -81,13 +81,22 @@ Ents := [].{
 
     ## `&#35;` and `&#x22;`. A zero codepoint is U+FFFD, not a NUL — the spec
     ## is explicit, and emitting a NUL would corrupt the output string.
+    ##
+    ## The digit count is checked BEFORE anything is accumulated. The range test
+    ## below cannot guard the arithmetic: twenty decimal digits overflow a U64
+    ## on the way to a value, and Roc traps on overflow, so the parse crashed
+    ## instead of leaving the text literal.
     numeric : Str -> Try(Str, [NotFound])
     numeric = |name| {
         body = name.drop_prefix("#")
         hex_body = Str.from_utf8_lossy(List.drop_first(Str.to_utf8(body), 1))
         cp = if (body.starts_with("x") or body.starts_with("X")) and !Str.is_empty(hex_body) {
-            Ents.hex_value(Str.to_utf8(hex_body), 0)
-        } else if Ents.all_digits(Str.to_utf8(body)) {
+            if Str.count_utf8_bytes(hex_body) > Ents.max_hex_digits {
+                Err(NotFound)
+            } else {
+                Ents.hex_value(Str.to_utf8(hex_body), 0)
+            }
+        } else if Ents.all_digits(Str.to_utf8(body)) and Str.count_utf8_bytes(body) <= Ents.max_dec_digits {
             Ok(Ents.dec_value(Str.to_utf8(body), 0))
         } else {
             Err(NotFound)
@@ -105,6 +114,15 @@ Ents := [].{
             Err(_) => Err(NotFound)
         }
     }
+
+    ## The spec's limits on a numeric reference: `&#` and 1-7 decimal digits,
+    ## `&#x` and 1-6 hex digits. Seven decimal digits cannot exceed a U64, and
+    ## neither can six hex ones.
+    max_dec_digits : U64
+    max_dec_digits = 7
+
+    max_hex_digits : U64
+    max_hex_digits = 6
 
     all_digits : List(U8) -> Bool
     all_digits = |b|

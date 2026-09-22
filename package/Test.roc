@@ -209,3 +209,13 @@ expect Test.shape("| a | b |\n|---|---|\n| x ||") == "T2(a,b,x,)"
 ## table, which was the documented divergence from GFM — the cell is fitted to
 ## the header's width like any other row.
 expect Test.shape("| a |\n|---|\nx | y") == "T1(a,x)"
+
+## --- numeric references out of range -----------------------------------------
+##
+## The spec caps a numeric reference at 7 decimal or 6 hex digits, and anything
+## longer is literal text. The digits used to be accumulated in a U64 before the
+## range test, so twenty of them overflowed and crashed the parse.
+## should_render_an_overlong_decimal_reference_as_text
+expect Test.html("&#99999999999999999999;") == "<p>&amp;#99999999999999999999;</p>\n"
+## should_render_an_overlong_hex_reference_as_text
+expect Test.html("&#x123456789ABCDEF01;") == "<p>&amp;#x123456789ABCDEF01;</p>\n"
