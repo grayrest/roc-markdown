@@ -286,3 +286,26 @@ expect
 expect Test.html("[https://e.com](https://e.com)") == "<p><a href=\"https://e.com\">https://e.com</a></p>\n"
 ## should_link_a_label_that_is_an_email_address
 expect Test.html("[a@b.com](https://x.org)") == "<p><a href=\"https://x.org\">a@b.com</a></p>\n"
+
+## --- unmatched openers --------------------------------------------------------
+##
+## Each of these used to search to the end of the paragraph for a closer that
+## was not there, once per opener. They now answer from facts gathered once per
+## scan (`Scan.Ctx`); these pin that the shortcut gives the answer the search
+## did, including where a closer does exist.
+## should_decode_the_longest_named_reference
+expect Test.html("&CounterClockwiseContourIntegral;") == "<p>∳</p>\n"
+## should_leave_angle_brackets_with_no_closer_literal
+expect Test.html("a <<< b") == "<p>a &lt;&lt;&lt; b</p>\n"
+## should_leave_brackets_with_no_closer_literal
+expect Test.html("a [[[ b") == "<p>a [[[ b</p>\n"
+## should_find_a_code_span_past_an_unmatched_longer_run
+expect Test.html("``a`b`") == "<p>``a<code>b</code></p>\n"
+## should_find_an_email_after_a_failed_one_in_the_same_line
+expect Test.html("a_b c_d@y.com") == "<p>a_b <a href=\"mailto:c_d@y.com\">c_d@y.com</a></p>\n"
+## should_leave_an_email_with_no_dotted_domain_literal
+expect Test.html("a_b_c@x") == "<p>a_b_c@x</p>\n"
+## should_pair_emphasis_after_unmatched_closers
+expect Test.tree("a* a* *b*") == "a* a* E[b]"
+## should_pair_each_of_many_sequential_emphases
+expect Test.tree("*a* *b* **c**") == "E[a] E[b] S[c]"

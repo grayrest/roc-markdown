@@ -43,7 +43,7 @@ Ents := [].{
         if i >= List.len(b) {
             out
         } else if List.get(b, i) == Ok(38) {
-            match Ents.semi(b, i + 1) {
+            match Ents.semi_within(b, i + 1) {
                 Ok(close) =>
                     match Ents.lookup(Str.from_utf8_lossy(List.sublist(b, { start: i + 1, len: close - i - 1 }))) {
                         Ok(ch) => Ents.walk(b, close + 1, List.concat(out, Str.to_utf8(ch)))
@@ -58,15 +58,27 @@ Ents := [].{
             }
         }
 
-    semi : List(U8), U64 -> Try(U64, [NotFound])
-    semi = |b, i|
-        if i >= List.len(b) {
+    ## The `;` that could end a reference whose name starts at `from`, looked
+    ## for no further than the longest name reaches. Unbounded, every `&`
+    ## without a `;` searched to the end of the text, so a run of them was
+    ## quadratic.
+    semi_within : List(U8), U64 -> Try(U64, [NotFound])
+    semi_within = |b, from| Ents.semi(b, from, from + Ents.max_name_len)
+
+    semi : List(U8), U64, U64 -> Try(U64, [NotFound])
+    semi = |b, i, last|
+        if i >= List.len(b) or i > last {
             Err(NotFound)
         } else if List.get(b, i) == Ok(59) {
             Ok(i)
         } else {
-            Ents.semi(b, i + 1)
+            Ents.semi(b, i + 1, last)
         }
+
+    ## The longest reference name: `CounterClockwiseContourIntegral` is 31
+    ## bytes, and a numeric one is at most 8 (`#x` and six digits).
+    max_name_len : U64
+    max_name_len = 32
 
     lookup : Str -> Try(Str, [NotFound])
     lookup = |name|

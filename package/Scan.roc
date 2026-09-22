@@ -17,7 +17,7 @@ Scan := [].{
     ## role is still undecided.
     Tk : [
         Node(Inl),
-        Delim({ ch : U8, n : U64, opener : Bool, closer : Bool, both : Bool, at : U64 }),
+        Delim(Scan.Run),
     ]
 
     ## The generic byte helpers below — `at`, `slice`, `run_len`, `find_byte` —
@@ -27,10 +27,80 @@ Scan := [].{
     ##
     ## `end` is where this scan stops: the end of `b`, or the `]` of a link
     ## label being scanned in place (`settle`).
-    Ctx : { b : List(U8), defs : List(Ref.Def), end : U64 }
+    ##
+    ## The rest is what makes an UNMATCHED opener cheap. Each search below runs
+    ## to the end of the text when it fails, so a paragraph of `<<<<…` or
+    ## `[[[[…` cost a search per opener — quadratic. The facts that answer those
+    ## searches in advance are computed once per scan, as cmark does:
+    ##
+    ##  - `gt_end` / `rb_end`: one past the last `>` / `]`, or 0 when there is
+    ##    none. A tag or a bracket opened at or beyond it cannot close.
+    ##  - `tick_last`: for each backtick run length `n`, one past where the last
+    ##    run of exactly `n` starts (index `n - 1`, 0 for none). A code span
+    ##    opened at or beyond it cannot close.
+    ##  - `email_dead`: a position below which every word boundary is known not
+    ##    to start an email — see the email branch of `tokens`. The one fact
+    ##    learned DURING the scan rather than before it.
+    Ctx : {
+        b : List(U8),
+        defs : List(Ref.Def),
+        end : U64,
+        gt_end : U64,
+        rb_end : U64,
+        tick_last : List(U64),
+        email_dead : U64,
+    }
 
     context : List(U8), List(Ref.Def) -> Scan.Ctx
-    context = |b, defs| { b, defs, end: List.len(b) }
+    context = |b, defs| {
+        b,
+        defs,
+        end: List.len(b),
+        gt_end: Scan.end_of_last(b, List.len(b), 62),
+        rb_end: Scan.end_of_last(b, List.len(b), 93),
+        tick_last: if List.contains(b, 96) {
+            Scan.tick_table(b, 0, [])
+        } else {
+            []
+        },
+        email_dead: 0,
+    }
+
+    ## One past the last `c` before `i`, or 0 when there is none.
+    end_of_last : List(U8), U64, U8 -> U64
+    end_of_last = |b, i, c|
+        if i == 0 {
+            0
+        } else if Scan.at(b, i - 1) == c {
+            i
+        } else {
+            Scan.end_of_last(b, i - 1, c)
+        }
+
+    ## `tick_last`, built in one pass over the maximal backtick runs.
+    tick_table : List(U8), U64, List(U64) -> List(U64)
+    tick_table = |b, i, table|
+        if i >= List.len(b) {
+            table
+        } else if Scan.at(b, i) == 96 {
+            n = Scan.run_len(b, i, 96, 0)
+            grown = if List.len(table) < n {
+                List.concat(table, List.repeat(0, n - List.len(table)))
+            } else {
+                table
+            }
+            Scan.tick_table(b, i + n, List.set(grown, n - 1, i + 1).ok_or(grown))
+        } else {
+            Scan.tick_table(b, i + 1, table)
+        }
+
+    ## Is there a run of exactly `n` backticks starting at or after `from`?
+    tick_run_after : Scan.Ctx, U64, U64 -> Bool
+    tick_run_after = |ctx, from, n|
+        match List.get(ctx.tick_last, n - 1) {
+            Ok(last) => last > from
+            Err(_) => False
+        }
 
     ## The pending literal text, carrying the SOURCE offset it began at (T0b).
     ## The offset rides WITH the buffer so a finished `Text` node knows its
@@ -184,15 +254,28 @@ Scan := [].{
                 Scan.newline(ctx, i, buf, out)
             } else if (c == 104 or c == 119 or c == 102) and Scan.at_boundary(ctx.b, i) and Scan.bare_len(ctx.b, i) > 0 {
                 Scan.bare_link(ctx, i, buf, out)
-            } else if Scan.at_boundary(ctx.b, i) and Scan.email_len(ctx.b, i) > 0 {
-                ## Found at its START, like a bare URL. Backing up from the `@`
-                ## looked simpler and could not work: an `_` in the local part
-                ## is an emphasis delimiter, so by the time the `@` arrives the
-                ## buffer has already been flushed and the local part is gone.
-                n = Scan.email_len(ctx.b, i)
-                addr = Scan.slice(ctx.b, i, i + n)
-                node = Node(Inl.at(i, i + n, Link({ href: "mailto:${addr}", title: "", kids: [Inl.at(i, i + n, Text(addr))] })))
-                Scan.tokens(ctx, i + n, Scan.buf0(i + n), List.append(Scan.flush(buf, i, out), node))
+            } else if i >= ctx.email_dead and Scan.at_boundary(ctx.b, i) {
+                ## An email is found at its START, like a bare URL. Backing up
+                ## from the `@` looked simpler and could not work: an `_` in the
+                ## local part is an emphasis delimiter, so by the time the `@`
+                ## arrives the buffer has already been flushed and the local
+                ## part is gone.
+                e = Scan.email_len(ctx.b, i)
+                if e.len > 0 {
+                    n = e.len
+                    addr = Scan.slice(ctx.b, i, i + n)
+                    node = Node(Inl.at(i, i + n, Link({ href: "mailto:${addr}", title: "", kids: [Inl.at(i, i + n, Text(addr))] })))
+                    Scan.tokens(ctx, i + n, Scan.buf0(i + n), List.append(Scan.flush(buf, i, out), node))
+                } else {
+                    ## A miss marks the whole local-part run dead, and the byte
+                    ## is dispatched again past this test. Every later boundary
+                    ## inside the run (after an `_`) reaches the same run end,
+                    ## the same `@` or lack of one and the same domain, with a
+                    ## local part that is a suffix of this one — so it fails
+                    ## too. Without the mark, `a_a_a_…` re-scanned the rest of
+                    ## the run at every underscore.
+                    Scan.tokens({ ..ctx, email_dead: i + Scan.max_u64(e.local, 1) }, i, buf, out)
+                }
             } else if c == 38 {
                 Scan.entity(ctx, i, buf, out)
             } else if c == 60 {
@@ -209,6 +292,9 @@ Scan := [].{
                 Scan.tokens(ctx, i + 1, Scan.push(buf, c), out)
             }
         }
+
+    max_u64 : U64, U64 -> U64
+    max_u64 = |a, b| if a > b { a } else { b }
 
     flush : Scan.Buf, U64, List(Scan.Tk) -> List(Scan.Tk)
     flush = |buf, upto, out|
@@ -243,7 +329,12 @@ Scan := [].{
     code_span : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> List(Scan.Tk)
     code_span = |ctx, i, buf, out| {
         n = Scan.run_len(ctx.b, i, 96, 0)
-        match Scan.find_run(ctx.b, i + n, 96, n) {
+        found = if Scan.tick_run_after(ctx, i + n, n) {
+            Scan.find_run(ctx.b, i + n, 96, n)
+        } else {
+            Err(NotFound)
+        }
+        match found {
             Ok(close) => {
                 raw = Scan.slice(ctx.b, i + n, close)
                 Scan.tokens(ctx, close + n, Scan.buf0(close + n), List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + n, Code(Scan.strip_code(raw))))))
@@ -353,65 +444,114 @@ Scan := [].{
 
     ## --- stage 2: emphasis ---------------------------------------------------
     ##
-    ## Find the first closer, then the NEAREST opener before it. Nearest rather
-    ## than first is what makes `*a **b** c*` nest correctly; taking the first
-    ## opener would pair the outer `*` with the inner `**`.
+    ## Take closers left to right; for each, the NEAREST opener before it.
+    ## Nearest rather than first is what makes `*a **b** c*` nest correctly;
+    ## taking the first opener would pair the outer `*` with the inner `**`.
     ##
     ## Any delimiter left unmatched when the scan runs out is literal text, which
     ## is why `leftover` exists rather than a silent drop: a stray `*` is a `*`.
+    ##
+    ## The tokens already passed sit on `stack`, and nothing on it is a closer:
+    ## a closer either pairs, and the pair collapses into one node on the stack,
+    ## or it is demoted where it stands. That is what keeps this linear. It used
+    ## to find the first closer from token 0 after every pairing and rebuild the
+    ## whole token list around each one, so `*a* *b* …` and a paragraph of
+    ## unmatched `a* a* …` were both quadratic.
     emphasis : List(Scan.Tk) -> List(Inl)
-    emphasis = |tks|
-        match Scan.first_closer(tks, 0) {
-            Ok(ci) =>
-                match Scan.opener_before(tks, ci) {
-                    Ok(oi) => Scan.emphasis(Scan.join(tks, oi, ci))
-                    Err(_) => Scan.emphasis(Scan.demote(tks, ci))
-                }
-            Err(_) => List.join(List.map(tks, Scan.leftover))
-        }
+    emphasis = |tks| Scan.emph_walk(tks, 0, [], [])
 
-    first_closer : List(Scan.Tk), U64 -> Try(U64, [NotFound])
-    first_closer = |tks, i|
+    ## `floors` is cmark's openers-bottom: for each kind of closer
+    ## (`Scan.Kind`), no stack entry below its floor is an opener that kind
+    ## could take, because an earlier closer of the kind walked down there and
+    ## found none. Whether an opener suits a closer depends only on the
+    ## closer's kind, so the next closer of that kind stops at the floor
+    ## instead of walking to the bottom again.
+    emph_walk : List(Scan.Tk), U64, List(Scan.Tk), List(Scan.Floor) -> List(Inl)
+    emph_walk = |tks, i, stack, floors|
         match List.get(tks, i) {
             Ok(Delim(d)) =>
                 if d.closer {
-                    Ok(i)
+                    Scan.close_with(tks, i, d, stack, floors)
                 } else {
-                    Scan.first_closer(tks, i + 1)
+                    Scan.emph_walk(tks, i + 1, List.append(stack, Delim(d)), floors)
                 }
-            Ok(_) => Scan.first_closer(tks, i + 1)
-            Err(_) => Err(NotFound)
+            Ok(tk) => Scan.emph_walk(tks, i + 1, List.append(stack, tk), floors)
+            Err(_) => List.join(List.map(stack, Scan.leftover))
         }
 
-    ## The nearest opener before `ci` of the same character. The "rule of three"
-    ## is applied: when either side can both open and close, a pairing whose
-    ## combined length is a multiple of 3 is rejected unless both lengths are.
-    ## Without it `**foo*bar**` mis-nests.
-    opener_before : List(Scan.Tk), U64 -> Try(U64, [NotFound])
-    opener_before = |tks, ci| Scan.opener_walk(tks, ci, ci)
+    ## Pair closer `c` (token `i`) with the nearest opener it can take, or
+    ## demote it. A closer longer than what one pairing consumes is paired
+    ## again with what is left, so `***a***` becomes strong-inside-em.
+    close_with : List(Scan.Tk), U64, Scan.Run, List(Scan.Tk), List(Scan.Floor) -> List(Inl)
+    close_with = |tks, i, c, stack, floors| {
+        kind = Scan.kind_of(c)
+        match Scan.opener_walk(stack, c, List.len(stack), Scan.floor_of(floors, kind)) {
+            Ok(oi) => {
+                joined = Scan.join(stack, oi, c)
+                ## The stack from `oi` up was rebuilt, so a floor above it no
+                ## longer indexes the entry it did. Clamping keeps each claim
+                ## true: nothing below `oi` moved.
+                clamped = Scan.clamp_floors(floors, oi)
+                if joined.rest.n > 0 {
+                    Scan.close_with(tks, i, joined.rest, joined.stack, clamped)
+                } else {
+                    Scan.emph_walk(tks, i + 1, joined.stack, clamped)
+                }
+            }
+            ## A closer with no opener cannot stay a closer. It keeps its
+            ## opener flag: a run that can both open and close still opens.
+            Err(_) =>
+                Scan.emph_walk(tks, i + 1, List.append(stack, Delim({ ..c, closer: False })), Scan.set_floor(floors, kind, List.len(stack)))
+        }
+    }
 
-    opener_walk : List(Scan.Tk), U64, U64 -> Try(U64, [NotFound])
-    opener_walk = |tks, ci, j|
-        if j == 0 {
+    ## A delimiter run, as `Tk.Delim` carries it.
+    Run : { ch : U8, n : U64, opener : Bool, closer : Bool, both : Bool, at : U64 }
+
+    ## What decides which openers a closer can take: its character, and the
+    ## two inputs `rule_of_three` reads from it.
+    Kind : { ch : U8, both : Bool, rem : U64 }
+
+    Floor : { kind : Scan.Kind, at : U64 }
+
+    kind_of : Scan.Run -> Scan.Kind
+    kind_of = |d| { ch: d.ch, both: d.both, rem: d.n % 3 }
+
+    floor_of : List(Scan.Floor), Scan.Kind -> U64
+    floor_of = |floors, kind|
+        match List.find_first(floors, |f| f.kind == kind) {
+            Ok(f) => f.at
+            Err(_) => 0
+        }
+
+    set_floor : List(Scan.Floor), Scan.Kind, U64 -> List(Scan.Floor)
+    set_floor = |floors, kind, pos| List.append(List.drop_if(floors, |f| f.kind == kind), { kind, at: pos })
+
+    clamp_floors : List(Scan.Floor), U64 -> List(Scan.Floor)
+    clamp_floors = |floors, top| List.map(floors, |f| if f.at > top { { ..f, at: top } } else { f })
+
+    ## The nearest opener below `j` and at or above `floor` of the same
+    ## character. The "rule of three" is applied: when either side can both
+    ## open and close, a pairing whose combined length is a multiple of 3 is
+    ## rejected unless both lengths are. Without it `**foo*bar**` mis-nests.
+    opener_walk : List(Scan.Tk), Scan.Run, U64, U64 -> Try(U64, [NotFound])
+    opener_walk = |stack, c, j, floor|
+        if j <= floor {
             Err(NotFound)
         } else {
             k = j - 1
-            match List.get(tks, k) {
+            match List.get(stack, k) {
                 Ok(Delim(o)) =>
-                    match List.get(tks, ci) {
-                        Ok(Delim(c)) =>
-                            if o.opener and o.ch == c.ch and Scan.rule_of_three(o, c) {
-                                Ok(k)
-                            } else {
-                                Scan.opener_walk(tks, ci, k)
-                            }
-                        _ => Scan.opener_walk(tks, ci, k)
+                    if o.opener and o.ch == c.ch and Scan.rule_of_three(o, c) {
+                        Ok(k)
+                    } else {
+                        Scan.opener_walk(stack, c, k, floor)
                     }
-                _ => Scan.opener_walk(tks, ci, k)
+                _ => Scan.opener_walk(stack, c, k, floor)
             }
         }
 
-    rule_of_three : { ch : U8, n : U64, opener : Bool, closer : Bool, both : Bool, at : U64 }, { ch : U8, n : U64, opener : Bool, closer : Bool, both : Bool, at : U64 } -> Bool
+    rule_of_three : Scan.Run, Scan.Run -> Bool
     ## `both` is the ORIGINAL flanking, captured at tokenize time. Reading the
     ## live `closer`/`opener` flags here was a real bug: demoting an unmatched
     ## closer also made it rule-of-three-eligible, so `*foo**bar*` paired the
@@ -424,60 +564,46 @@ Scan := [].{
         }
 
     ## Consume two delimiters from each side for a `<strong>`, one for an `<em>`,
-    ## and wrap everything between. A run longer than what is consumed STAYS, so
-    ## `***a***` becomes strong-inside-em across two passes rather than needing a
-    ## special case.
-    join : List(Scan.Tk), U64, U64 -> List(Scan.Tk)
-    join = |tks, oi, ci|
-        match List.get(tks, oi) {
-            Ok(Delim(o)) =>
-                match List.get(tks, ci) {
-                    Ok(Delim(c)) => {
-                        take = if o.n >= 2 and c.n >= 2 {
-                            2
-                        } else {
-                            1
-                        }
-                        inner = Scan.emphasis(List.sublist(tks, { start: oi + 1, len: ci - oi - 1 }))
-                        node = if c.ch == 126 {
-                            Strike(inner)
-                        } else if take == 2 {
-                            Strong(inner)
-                        } else {
-                            Emph(inner)
-                        }
-                        before = List.sublist(tks, { start: 0, len: oi })
-                        after = List.sublist(tks, { start: ci + 1, len: List.len(tks) - ci - 1 })
-                        emph_start = o.at + (o.n - take)
-                        emph_end = c.at + take
-                        mid = List.concat(Scan.keep(o, o.n - take, o.at), [Node(Inl.at(emph_start, emph_end, node))])
-                        tail = List.concat(Scan.keep(c, c.n - take, c.at + take), after)
-                        List.concat(before, List.concat(mid, tail))
-                    }
-                    _ => tks
+    ## and wrap everything above the opener. What is left of the opener stays
+    ## on the stack beneath the new node; what is left of the closer (`rest`,
+    ## `n` 0 when nothing is) goes back to `close_with`.
+    ##
+    ## The stack is cut with `drop_last` after the inner nodes are copied out,
+    ## so a unique stack is shortened in place rather than rebuilt.
+    join : List(Scan.Tk), U64, Scan.Run -> { stack : List(Scan.Tk), rest : Scan.Run }
+    join = |stack, oi, c|
+        match List.get(stack, oi) {
+            Ok(Delim(o)) => {
+                take = if o.n >= 2 and c.n >= 2 {
+                    2
+                } else {
+                    1
                 }
-            _ => tks
+                inner = List.join(List.map(List.drop_first(stack, oi + 1), Scan.leftover))
+                node = if c.ch == 126 {
+                    Strike(inner)
+                } else if take == 2 {
+                    Strong(inner)
+                } else {
+                    Emph(inner)
+                }
+                base = List.drop_last(stack, List.len(stack) - oi)
+                kept = List.concat(base, Scan.keep(o, o.n - take, o.at))
+                emph = Node(Inl.at(o.at + (o.n - take), c.at + take, node))
+                { stack: List.append(kept, emph), rest: { ..c, n: c.n - take, at: c.at + take } }
+            }
+            ## `opener_walk` only answers with a delimiter, so this is not
+            ## reached; the closer is left unconsumed rather than looping.
+            _ => { stack: List.append(stack, Delim({ ..c, closer: False })), rest: { ..c, n: 0 } }
         }
 
     ## What is left of a partially consumed run.
-    keep : { ch : U8, n : U64, opener : Bool, closer : Bool, both : Bool, at : U64 }, U64, U64 -> List(Scan.Tk)
+    keep : Scan.Run, U64, U64 -> List(Scan.Tk)
     keep = |d, n, pos|
         if n == 0 {
             []
         } else {
             [Delim({ ..d, n, at: pos })]
-        }
-
-    ## A closer with no opener cannot stay a closer, or the scan loops on it.
-    demote : List(Scan.Tk), U64 -> List(Scan.Tk)
-    demote = |tks, i|
-        match List.get(tks, i) {
-            Ok(Delim(d)) =>
-                match List.set(tks, i, Delim({ ..d, closer: False })) {
-                    Ok(t) => t
-                    Err(_) => tks
-                }
-            _ => tks
         }
 
     ## --- links, images, autolinks --------------------------------------------
@@ -500,13 +626,13 @@ Scan := [].{
     ## twice, so `[[[…a](u)…](u)](u)` doubled in cost per level.
     bracket : Scan.Ctx, U64, U64, Scan.Buf, List(Scan.Tk), Bool -> List(Scan.Tk)
     bracket = |ctx, i, skip, buf, out, image|
-        match Scan.match_bracket(ctx.b, i + skip, 1) {
+        match Scan.close_of(ctx, i + skip) {
             Ok(close) =>
                 if Scan.at(ctx.b, close + 1) == 91 {
                     ## `[text][label]` and `[label][]` — a REFERENCE. An empty
                     ## second bracket means "use the first as the label", which
                     ## is why this cannot just read the second one.
-                    match Scan.match_bracket(ctx.b, close + 2, 1) {
+                    match Scan.close_of(ctx, close + 2) {
                         Ok(rclose) => {
                             written = Scan.slice(ctx.b, close + 2, rclose)
                             key = if Str.is_empty(written) {
@@ -541,6 +667,16 @@ Scan := [].{
                     }
                 }
             Err(_) => Scan.literal(ctx, i, skip, buf, out)
+        }
+
+    ## The `]` closing a bracket whose content starts at `from` — answered
+    ## without a search when no `]` is left in the text.
+    close_of : Scan.Ctx, U64 -> Try(U64, [NotFound])
+    close_of = |ctx, from|
+        if from >= ctx.rb_end {
+            Err(NotFound)
+        } else {
+            Scan.match_bracket(ctx.b, from, 1)
         }
 
     ## Look the label up and build the node, or fall back to literal text.
@@ -972,7 +1108,10 @@ Scan := [].{
     ## package does not pass it through.
     angle : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> List(Scan.Tk)
     angle = |ctx, i, buf, out|
-        if Scan.starts(ctx.b, i, "<![CDATA[") {
+        if i + 1 >= ctx.gt_end {
+            ## No `>` anywhere after this, so nothing here can close.
+            Scan.tokens(ctx, i + 1, Scan.push(buf, 60), out)
+        } else if Scan.starts(ctx.b, i, "<![CDATA[") {
             ## CDATA ends at `]]>`, and its body may contain `>` — searching for
             ## the first one cut it in half.
             match Scan.find_cdata(ctx.b, i + 9) {
@@ -1113,14 +1252,21 @@ Scan := [].{
         Scan.tokens(ctx, i + n, Scan.buf0(i + n), List.append(Scan.flush(buf, i, out), node))
     }
 
-    ## The length of an email starting here, or 0.
+    ## The length of an email starting here (`len`, 0 for none), and how far
+    ## its local-part run reached either way (`local`) — the second is what
+    ## lets `tokens` skip the boundaries inside a run that failed.
     ##
     ## Local part, `@`, then a domain carrying a dot. The domain may not end on
     ## a hyphen or underscore, which is what keeps the trailing punctuation of
     ## `a.b-c_d@a.b-` out of the link.
-    email_len : List(U8), U64 -> U64
+    email_len : List(U8), U64 -> { len : U64, local : U64 }
     email_len = |b, i| {
         local = Scan.local_len(b, i, 0)
+        { len: Scan.email_rest(b, i, local), local }
+    }
+
+    email_rest : List(U8), U64, U64 -> U64
+    email_rest = |b, i, local|
         if local == 0 or Scan.at(b, i + local) != 64 {
             0
         } else {
@@ -1136,7 +1282,6 @@ Scan := [].{
                 local + 1 + dom
             }
         }
-    }
 
     has_alnum : List(U8), U64, U64 -> Bool
     has_alnum = |b, from, to|
@@ -1178,9 +1323,13 @@ Scan := [].{
     ##
     ## The decoded text joins `buf` rather than becoming its own node, so
     ## `a&amp;ctx.b` stays one text run.
+    ##
+    ## The `;` is looked for no further than the longest name could reach. An
+    ## unbounded search ran to the end of the text for every `&` without one,
+    ## so a paragraph of `&`s was quadratic.
     entity : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> List(Scan.Tk)
     entity = |ctx, i, buf, out|
-        match Scan.find_byte(ctx.b, i + 1, 59) {
+        match Ents.semi_within(ctx.b, i + 1) {
             Ok(close) =>
                 match Ents.lookup(Scan.slice(ctx.b, i + 1, close)) {
                     Ok(ch) => Scan.tokens(ctx, close + 1, Scan.push_all(buf, Str.to_utf8(ch)), out)
