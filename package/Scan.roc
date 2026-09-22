@@ -24,7 +24,13 @@ Scan := [].{
     ## deliberately keep taking a plain `List(U8)`. They are called on labels,
     ## destinations and titles as well as on the scan buffer, and by `Lex` on
     ## lines that have no context at all.
-    Ctx : { b : List(U8), defs : List(Ref.Def) }
+    ##
+    ## `end` is where this scan stops: the end of `b`, or the `]` of a link
+    ## label being scanned in place (`settle`).
+    Ctx : { b : List(U8), defs : List(Ref.Def), end : U64 }
+
+    context : List(U8), List(Ref.Def) -> Scan.Ctx
+    context = |b, defs| { b, defs, end: List.len(b) }
 
     ## The pending literal text, carrying the SOURCE offset it began at (T0b).
     ## The offset rides WITH the buffer so a finished `Text` node knows its
@@ -44,7 +50,7 @@ Scan := [].{
     push_all = |buf, xs| { ..buf, bytes: List.concat(buf.bytes, xs) }
 
     run : Str, List(Ref.Def) -> List(Inl)
-    run = |s, defs| Scan.emphasis(Scan.tokens({ b: Str.to_utf8(s), defs: defs }, 0, Scan.buf0(0), []))
+    run = |s, defs| Scan.emphasis(Scan.tokens(Scan.context(Str.to_utf8(s), defs), 0, Scan.buf0(0), []))
 
     ## --- character classes ---------------------------------------------------
     ##
@@ -166,7 +172,7 @@ Scan := [].{
     ## the output per character would rebuild the node list on every byte.
     tokens : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> List(Scan.Tk)
     tokens = |ctx, i, buf, out|
-        if i >= List.len(ctx.b) {
+        if i >= ctx.end {
             Scan.flush(buf, i, out)
         } else {
             c = Scan.at(ctx.b, i)
@@ -550,36 +556,40 @@ Scan := [].{
 
     ## A destination is in hand; scan the label once and decide.
     ##
+    ## The label is scanned IN PLACE — the same bytes, stopping at the `]` —
+    ## so its tokens are exactly what scanning on past the `[` would produce:
+    ## a word boundary, a delimiter's flanking and a bare URL all see the text
+    ## around the label, not the edge of a copy.
+    ##
     ## A link may not contain a link, so a label that produced one leaves the
-    ## outer bracket literal with the inner link intact. Its tokens are spliced
-    ## back in after the `[` and scanning resumes at the `]` — the same result
-    ## as re-scanning the label as text, without scanning it a second time. The
+    ## outer bracket literal with the inner link intact. Its tokens are then
+    ## spliced back in after the `[`, and scanning carries on where they end —
+    ## the result re-scanning the label as text gave, without scanning it a
+    ## second time. The same holds when a token ran past the `]` (an inner
+    ## link whose destination does): the label was not a label after all. The
     ## tokens are still DELIMITERS, not finished emphasis, so a `*` inside the
-    ## label can still pair with one outside it, as it could before.
+    ## label can still pair with one outside it.
     settle : Scan.Ctx, U64, U64, U64, U64, { dest : Str, title : Str, ok : Bool }, Scan.Buf, List(Scan.Tk), Bool -> List(Scan.Tk)
     settle = |ctx, i, skip, close, resume, parts, buf, out, image| {
-        label = Scan.label_tokens(ctx, i + skip, close)
-        if !image and Scan.tks_have_link(label) {
+        label = Scan.tokens({ ..ctx, end: close }, i + skip, Scan.buf0(i + skip), [])
+        stop = Scan.tks_end(label, i + skip)
+        if stop > close or (!image and Scan.tks_have_link(label)) {
             opener = Scan.push_all(buf, List.sublist(ctx.b, { start: i, len: skip }))
-            Scan.tokens(ctx, close, Scan.buf0(close), List.concat(Scan.flush(opener, i + skip, out), label))
+            Scan.tokens(ctx, stop, Scan.buf0(stop), List.concat(Scan.flush(opener, i + skip, out), label))
         } else {
             nodes = Scan.link_node(i, resume, Scan.emphasis(label), parts, image)
             Scan.tokens(ctx, resume, Scan.buf0(resume), List.concat(Scan.flush(buf, i, out), nodes))
         }
     }
 
-    ## The label's tokens, scanned on their own and moved to source offsets.
-    label_tokens : Scan.Ctx, U64, U64 -> List(Scan.Tk)
-    label_tokens = |ctx, from, to| {
-        tks = Scan.tokens({ b: Str.to_utf8(Scan.slice(ctx.b, from, to)), defs: ctx.defs }, 0, Scan.buf0(0), [])
-        List.map(tks, |tk| Scan.shift_tk(tk, from, to))
-    }
-
-    shift_tk : Scan.Tk, U64, U64 -> Scan.Tk
-    shift_tk = |tk, base, cap|
-        match tk {
-            Node(n) => Node(Inl.shift(n, base, cap))
-            Delim(d) => Delim({ ..d, at: d.at + base })
+    ## Where a token list ends: every token ends where the next begins, so the
+    ## last one's end is where the scan that made them stopped.
+    tks_end : List(Scan.Tk), U64 -> U64
+    tks_end = |tks, from|
+        match List.last(tks) {
+            Ok(Node(n)) => n.loc.outer.end
+            Ok(Delim(d)) => d.at + d.n
+            Err(_) => from
         }
 
     ## `has_link` over tokens. Emphasis is not built yet, so a link is either a

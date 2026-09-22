@@ -274,3 +274,15 @@ expect Test.shape(Str.repeat("#", 300)) == "P(${Str.repeat("#", 300)})"
 expect
     Test.html("${Str.repeat("[", 30)}a${Str.repeat("](u)", 30)}")
     == "<p>${Str.repeat("[", 29)}<a href=\"u\">a</a>${Str.repeat("](u)", 29)}</p>\n"
+
+## --- a label that starts with a URL -------------------------------------------
+##
+## GFM's bare-URL and email autolinks apply to text, not to a link's own label,
+## so `[https://e.com](u)` is a link to `u`. The label used to be scanned as a
+## string of its own, where its first byte sat at a word boundary; the URL
+## became a link inside the label, and a link may not contain one, so the whole
+## thing fell back to text.
+## should_link_a_label_that_is_itself_a_url
+expect Test.html("[https://e.com](https://e.com)") == "<p><a href=\"https://e.com\">https://e.com</a></p>\n"
+## should_link_a_label_that_is_an_email_address
+expect Test.html("[a@b.com](https://x.org)") == "<p><a href=\"https://x.org\">a@b.com</a></p>\n"
