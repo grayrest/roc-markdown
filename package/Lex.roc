@@ -6,6 +6,10 @@
 import Scan
 
 Lex := [].{
+    ## `drop_prefix`, not `drop_first_bytes`: the latter is the CHECKED form and
+    ## returns `Try(Str, [BadUtf8])` because it validates that the byte offset
+    ## lands on a character boundary. Dropping a literal `" "` cannot land
+    ## mid-character, so it needs no `Try` and this stays a plain fold.
     indent : Str, U64 -> U64
     indent = |s, acc|
         if s.starts_with(" ") {
@@ -63,8 +67,6 @@ Lex := [].{
             Err(_) => out
         }
 
-    ## Three or more dashes and nothing else. A table delimiter never reaches
-    ## here — it starts with `|` and is claimed earlier.
     ## Three or more of `-`, `*` or `_`, all the SAME character, with spaces
     ## allowed between them. Only `-` was recognised before, so `***` and `___`
     ## were prose, and `- - -` was a list.
@@ -119,10 +121,8 @@ Lex := [].{
         !List.is_empty(b) and List.len(List.keep_if(b, |x| x >= 48 and x <= 57)) == List.len(b)
     }
 
-    ## Which list marker a raw line carries, if any.
-    ##
-    ## The ordered case tests `split_first(". ")` and then checks the text before
-    ## it is all digits, so `e.g. thing` and `Note 1. thing` both stay prose.
+    ## The value of a run of ASCII digits. `marker_at` bounds the run to nine
+    ## digits first, so it cannot overflow.
     digits_value : List(U8), U64 -> U64
     digits_value = |b, acc|
         match List.first(b) {
@@ -140,10 +140,6 @@ Lex := [].{
         }
     }
 
-    ## `drop_prefix`, not `drop_first_bytes`: the latter is the CHECKED form and
-    ## returns `Try(Str, [BadUtf8])` because it validates that the byte offset
-    ## lands on a character boundary. Dropping a literal `" "` cannot land
-    ## mid-character, so it needs no `Try` and this stays a plain fold.
     ## A fence opens on three or more backticks or tildes. A backtick fence's
     ## info string may not contain a backtick, which is what keeps `` `foo` ``
     ## in a paragraph from opening one.
@@ -197,6 +193,10 @@ Lex := [].{
         }
     }
 
+    ## Which list marker a raw line carries, if any.
+    ##
+    ## The ordered case splits at the first `.` and then checks the text before
+    ## it is all digits, so `e.g. thing` and `Note 1. thing` both stay prose.
     marker_at : Str -> [Bullet(U64, Str), Numbered(U64, U64, Str), NotList]
     marker_at = |raw| {
         ind = Lex.indent(raw, 0)
@@ -306,9 +306,6 @@ Lex := [].{
         }
     }
 
-    ## Start a new entry, closing whatever was open. Paragraphs and tables close
-    ## because a list interrupts them; the previous ENTRY closes into `items` so
-    ## the run continues.
     ## The first line of an entry, de-indented to its content column.
     ##
     ## A line no longer than the column has NO content — a marker alone. It has

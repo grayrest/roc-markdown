@@ -10,18 +10,17 @@ import Inl exposing [Inl]
 import Scan
 
 Table := [].{
+    ## One source line, split into cells that each remember where they came
+    ## from. `src` is kept beside them so a padded cell has somewhere to sit.
+    Row : { src : Loc.Seg, cells : List(Loc.Seg) }
+
     ## The delimiter row is dropped by SHAPE, not by position: any row made only
     ## of `-` and `:` is one. Dropping row 1 by index instead would corrupt a
     ## table whose delimiter is missing, and would silently accept a body row
     ## that happened to sit there.
     ##
-    ## Alignment is not parsed. The corpus this targets had zero `:---` markers
-    ## across 467 delimiter cells, and a field that is always the same value is
-    ## worse than no field at all.
-    ## One source line, split into cells that each remember where they came
-    ## from. `src` is kept beside them so a padded cell has somewhere to sit.
-    Row : { src : Loc.Seg, cells : List(Loc.Seg) }
-
+    ## Alignment comes from the delimiter row too, one entry per column
+    ## (`align_of`).
     parse : List(Loc.Seg), List(Ref.Def), Loc.T -> Block
     parse = |lines, defs, loc| {
         all = List.map(lines, |l| { src: l, cells: Table.cells_of(l) })

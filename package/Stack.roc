@@ -529,6 +529,9 @@ Stack := [].{
             _ => True
         }
 
+    ## Start a new entry, closing whatever was open. Paragraphs and tables close
+    ## because a list interrupts them; the previous ENTRY closes into its list
+    ## so the run continues.
     open_entry : List(Stack.Open), Str, Loc.Ivl -> List(Stack.Open)
     open_entry = |st, rest, lo| {
         top = Stack.tip(st)

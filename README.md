@@ -40,7 +40,7 @@ list to extract the first heading for the page title.
 
 ## Spec Conformance
 
-The parser passes 572 / 576 combined test cases between CommonMark and GFM.
+The parser passes 672 / 676 combined test cases between CommonMark and GFM.
 
 Three are extension divergences. CommonMark has no autolink extension, so it
 asserts a bare URL as text while the GFM extension says it is a link.
@@ -57,7 +57,7 @@ the scope of a parser.
 opt-in.
 
 Aside from inline HTML, hrefs are filtered by `Scan.safe_href`, which refuses
-`javascript:`, `data:` and `vbscript:` and allows everything else.
+`javascript:`, `vbscript:`, `data:` and `file:` and allows everything else.
 
 ## Build size: The entity table is the one large constant
 

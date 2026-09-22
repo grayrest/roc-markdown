@@ -1100,9 +1100,10 @@ Scan := [].{
             t
         }
 
-    ## `<https://x>` and `<a@ctx.b.c>` become links to themselves. Anything else in
-    ## angle brackets is left literal — raw HTML is a separate decision and this
-    ## package does not pass it through.
+    ## `<https://x>` and `<a@b.c>` become links to themselves, and a
+    ## well-formed tag becomes a `Raw` node. Anything else in angle brackets is
+    ## left literal. Whether raw HTML reaches the output is the LOWERING's
+    ## decision (see the tag branch below), not the scanner's.
     angle : Scan.Ctx, U64, Scan.Buf, List(Scan.Tk) -> Scan.Step
     angle = |ctx, i, buf, out|
         if i + 1 >= ctx.gt_end {
@@ -1542,10 +1543,6 @@ Scan := [].{
             Err(_) => False
         }
 
-    ## An allowlist, not a denylist: absolute http(s), site-relative, in-page
-    ## fragment, and mailto. Everything else — `javascript:`, `data:`,
-    ## `vbscript:`, and any scheme invented after this line was written —
-    ## degrades to text without needing to be enumerated.
     ## The dangerous schemes, refused; everything else allowed.
     ##
     ## This was an allowlist, which is the safer instinct and the wrong rule
