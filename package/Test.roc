@@ -314,6 +314,6 @@ expect Test.tree("*a* *b* **c**") == "E[a] E[b] S[c]"
 ##
 ## Every token but plain text and delimiters went through a helper that called
 ## back into the scanner, so the stack grew by a frame per token and a
-## paragraph of about 6k lines (or links, or escapes) overflowed it.
-## should_scan_a_twenty_thousand_line_paragraph
-expect Test.shape(Str.repeat("a\n", 20000)) == "P(${Str.repeat("a ", 19999)}a)"
+## paragraph of about 6k escapes (or lines, or links) overflowed it.
+## should_scan_a_paragraph_of_twenty_thousand_escapes
+expect Test.html(Str.repeat("\\*", 20000)) == "<p>${Str.repeat("*", 20000)}</p>\n"
