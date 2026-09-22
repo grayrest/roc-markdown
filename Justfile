@@ -5,9 +5,11 @@ roc := env("ROC", "roc")
 default:
     @just --list
 
-# The package's gate — 51 hand-written expects, ~1.2 s, builds nothing.
+# The package's gate — the hand-written expects and the source-location
+# invariants (`LocTest.roc`), which the spec suite cannot see. Builds nothing.
 test:
     "{{ roc }}" test package/Test.roc
+    "{{ roc }}" test package/LocTest.roc
 
 # Conformance — 676 examples, CommonMark 0.31.2 + GFM. Red at 672 by design.
 spec:

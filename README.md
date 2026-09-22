@@ -123,7 +123,8 @@ package/
   Ents.roc      the HTML5 named character references
   Html.roc      blocks to a semantic HTML fragment
   Block.roc  Inl.roc  Span.roc  Doc.roc  Ref.roc   the types
-  Test.roc      the gate — 51 hand-written expects
+  Test.roc      the gate — hand-written expects
+  LocTest.roc   the gate — source-location invariants the spec suite cannot see
   SpecTest.roc  the conformance suite — GENERATED, do not hand-edit
 examples/
   md2html.roc   markdown files in, HTML files out, on basic-cli

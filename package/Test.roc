@@ -56,6 +56,39 @@ Test := [].{
 
     html : Str -> Str
     html = |src| Markdown.to_html(Markdown.parse(src))
+
+    ## The inline TREE of the first block, with each container marked by its
+    ## kind: `a **b** c` is `a S[b] c`. `text` flattens that structure away, so
+    ## a test through it passes whether the parser built a `Strong` or not.
+    tree : Str -> Str
+    tree = |src|
+        match List.first(Markdown.parse(src)) {
+            Ok(b) =>
+                match b.node {
+                    Para(ns) => Test.nodes(ns)
+                    _ => ""
+                }
+            Err(_) => ""
+        }
+
+    nodes : List(Inl) -> Str
+    nodes = |ns| Str.join_with(List.map(ns, Test.node), "")
+
+    node : Inl -> Str
+    node = |n|
+        match n.node {
+            Text(t) => t
+            Code(t) => "C[${t}]"
+            Emph(ks) => "E[${Test.nodes(ks)}]"
+            Strong(ks) => "S[${Test.nodes(ks)}]"
+            Strike(ks) => "X[${Test.nodes(ks)}]"
+            Link(l) => "A[${Test.nodes(l.kids)}](${l.href})"
+            Image(m) => "I[${Test.nodes(m.kids)}](${m.src})"
+            SoftBreak => " "
+            HardBreak => "\n"
+            Raw(r) => r
+            Task(_) => "T"
+        }
 }
 
 ## --- paragraph merging -------------------------------------------------------
@@ -110,15 +143,17 @@ expect Test.shape("| a | b |\n|---|---|\n| c | d | e |") == "T2(a,b,c,d)"
 expect Test.shape("> quoted") == "Q(P(quoted))"
 
 ## --- inline ------------------------------------------------------------------
-expect Test.shape("a **b** c") == "P(a b c)"
-expect Test.shape("a *b* c") == "P(a b c)"
+expect Test.tree("a **b** c") == "a S[b] c"
+expect Test.tree("a *b* c") == "a E[b] c"
 
 ## --- negative cases ----------------------------------------------------------
 ##
 ## An unsafe href keeps its LABEL and loses its href, becoming ordinary text.
 ## This is the only defence against a `javascript:` URL reaching a browser
 ## through `to_html`, so it is asserted on both sides of the package.
-expect Scan.run("[x](javascript:void)", []).len() == 1
+## The label comes back as TEXT. A count alone cannot say so: an accepted
+## link is one node too.
+expect Test.nodes(Scan.run("[x](javascript:void)", [])) == "x"
 expect Test.html("[x](javascript:void)") == "<p>x</p>\n"
 expect Test.html("[x](data:text/html,y)") == "<p>x</p>\n"
 expect Test.html("[x](vbscript:y)") == "<p>x</p>\n"
