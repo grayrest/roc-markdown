@@ -444,15 +444,20 @@ Stack := [].{
             Stack.atx_at(t)
         }
 
+    ## `######` is the deepest heading; seven or more hashes are prose.
+    max_atx_level : U64
+    max_atx_level = 6
+
     atx_at : Str -> U8
     atx_at = |t| {
         detabbed = Stack.detab(t)
         lvl = Lex.leading_hashes(Str.to_utf8(detabbed), 0)
-        rest = Str.drop_first_bytes(detabbed, lvl.to_u64()).ok_or("")
-        if lvl == 0 or lvl > 6 {
+        rest = Str.drop_first_bytes(detabbed, lvl).ok_or("")
+        if lvl == 0 or lvl > Stack.max_atx_level {
             0
         } else if Str.is_empty(rest) or rest.starts_with(" ") {
-            lvl
+            ## In range by the test above, so the narrowing cannot wrap.
+            lvl.to_u8_wrap()
         } else {
             ## No space after the run — `#hashtag` is prose.
             0
@@ -476,14 +481,14 @@ Stack := [].{
     atx_tail = |rest| {
         detabbed = Stack.detab(Str.trim_start(rest))
         lvl = Lex.leading_hashes(Str.to_utf8(detabbed), 0)
-        Str.trim_start(Str.drop_first_bytes(detabbed, lvl.to_u64()).ok_or(""))
+        Str.trim_start(Str.drop_first_bytes(detabbed, lvl).ok_or(""))
     }
 
     atx_text : Str -> Str
     atx_text = |t| {
         detabbed = Stack.detab(t)
         lvl = Lex.leading_hashes(Str.to_utf8(detabbed), 0)
-        rest = Str.drop_first_bytes(detabbed, lvl.to_u64()).ok_or("")
+        rest = Str.drop_first_bytes(detabbed, lvl).ok_or("")
         if Str.is_empty(rest) {
             ""
         } else {

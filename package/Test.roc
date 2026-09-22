@@ -219,3 +219,12 @@ expect Test.shape("| a |\n|---|\nx | y") == "T1(a,x)"
 expect Test.html("&#99999999999999999999;") == "<p>&amp;#99999999999999999999;</p>\n"
 ## should_render_an_overlong_hex_reference_as_text
 expect Test.html("&#x123456789ABCDEF01;") == "<p>&amp;#x123456789ABCDEF01;</p>\n"
+
+## --- a long run of hashes ------------------------------------------------------
+##
+## A heading marker is at most six hashes, but the run was counted in a U8, so
+## a line of 256 or more overflowed the counter instead of being prose.
+## should_treat_256_hashes_as_a_paragraph
+expect Test.shape(Str.repeat("#", 256)) == "P(${Str.repeat("#", 256)})"
+## should_treat_300_hashes_as_a_paragraph
+expect Test.shape(Str.repeat("#", 300)) == "P(${Str.repeat("#", 300)})"

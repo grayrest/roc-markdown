@@ -505,9 +505,12 @@ Lex := [].{
     ## The opening run's length. The old helper compared the WHOLE string against
     ## "#", "##", … because it was handed the first word; counting bytes is what
     ## lets the closing sequence be stripped without splitting on a space first.
-    leading_hashes : List(U8), U8 -> U8
+    ##
+    ## Counted in U64, not in the U8 a level fits in: the run is whatever the
+    ## line holds, and a line of 256 `#` overflowed a U8 counter and crashed.
+    leading_hashes : List(U8), U64 -> U64
     leading_hashes = |b, acc|
-        if List.get(b, acc.to_u64()) == Ok(35) {
+        if List.get(b, acc) == Ok(35) {
             Lex.leading_hashes(b, acc + 1)
         } else {
             acc
