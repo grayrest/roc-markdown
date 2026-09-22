@@ -263,3 +263,14 @@ expect Test.html("&#x123456789ABCDEF01;") == "<p>&amp;#x123456789ABCDEF01;</p>\n
 expect Test.shape(Str.repeat("#", 256)) == "P(${Str.repeat("#", 256)})"
 ## should_treat_300_hashes_as_a_paragraph
 expect Test.shape(Str.repeat("#", 300)) == "P(${Str.repeat("#", 300)})"
+
+## --- nested links in linear time ---------------------------------------------
+##
+## A link may not contain a link, so every outer bracket around `[a](u)` is
+## literal. Deciding that used to scan each label twice — once to find the inner
+## link, once again as literal text — so the time doubled per level and thirty
+## levels never finished.
+## should_parse_thirty_nested_links_as_one_link_in_brackets
+expect
+    Test.html("${Str.repeat("[", 30)}a${Str.repeat("](u)", 30)}")
+    == "<p>${Str.repeat("[", 29)}<a href=\"u\">a</a>${Str.repeat("](u)", 29)}</p>\n"

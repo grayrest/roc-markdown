@@ -486,6 +486,12 @@ Scan := [].{
     ## `skip` is 1 for a link and 2 for an image, so the two share every rule
     ## below except which node they build and whether the label survives as
     ## markup or as alt text.
+    ##
+    ## The label is scanned only once a destination or a definition has made a
+    ## link possible, and then only once: `settle` either wraps its tokens or
+    ## splices them back as text. Scanning it up front and again on the way to
+    ## a literal made nested brackets exponential — each level scanned its label
+    ## twice, so `[[[…a](u)…](u)](u)` doubled in cost per level.
     bracket : Scan.Ctx, U64, U64, Scan.Buf, List(Scan.Tk), Bool -> List(Scan.Tk)
     bracket = |ctx, i, skip, buf, out, image|
         match Scan.match_bracket(ctx.b, i + skip, 1) {
@@ -511,18 +517,12 @@ Scan := [].{
                     ## literal text when no definition matches, which is what
                     ## keeps `[not a link]` readable.
                     Scan.resolve(ctx, i, skip, close, close + 1, Scan.slice(ctx.b, i + skip, close), buf, out, image)
-                } else if Scan.at(ctx.b, close + 1) == 40 {
+                } else {
                     match Scan.match_paren(ctx.b, close + 2, 1) {
                         Ok(pclose) => {
-                            label = Inl.shift_all(Scan.run(Scan.slice(ctx.b, i + skip, close), ctx.defs), i + skip, close)
                             parts = Scan.dest_title(Scan.slice(ctx.b, close + 2, pclose))
-                            ## A link may not contain a link, so the outer
-                            ## bracket re-scans as literal text — which keeps
-                            ## the brackets AND the inner link, where emitting
-                            ## the label alone dropped both.
-                            if parts.ok and (image or !Scan.has_link(label)) {
-                                nodes = Scan.link_node(i, pclose + 1, label, parts, image)
-                                Scan.tokens(ctx, pclose + 1, Scan.buf0(pclose + 1), List.concat(Scan.flush(buf, i, out), nodes))
+                            if parts.ok {
+                                Scan.settle(ctx, i, skip, close, pclose + 1, parts, buf, out, image)
                             } else {
                                 ## `[foo](not a link)` is a shortcut reference
                                 ## followed by literal text, not text throughout
@@ -533,8 +533,6 @@ Scan := [].{
                         }
                         Err(_) => Scan.literal(ctx, i, skip, buf, out)
                     }
-                } else {
-                    Scan.literal(ctx, i, skip, buf, out)
                 }
             Err(_) => Scan.literal(ctx, i, skip, buf, out)
         }
@@ -546,17 +544,56 @@ Scan := [].{
     resolve : Scan.Ctx, U64, U64, U64, U64, Str, Scan.Buf, List(Scan.Tk), Bool -> List(Scan.Tk)
     resolve = |ctx, i, skip, close, resume, key, buf, out, image|
         match Scan.lookup(ctx.defs, Scan.fold_label(key)) {
-            Ok(d) => {
-                label = Inl.shift_all(Scan.run(Scan.slice(ctx.b, i + skip, close), ctx.defs), i + skip, close)
-                if !image and Scan.has_link(label) {
-                    Scan.literal(ctx, i, skip, buf, out)
-                } else {
-                    nodes = Scan.link_node(i, resume, label, { dest: d.dest, title: d.title, ok: True }, image)
-                    Scan.tokens(ctx, resume, Scan.buf0(resume), List.concat(Scan.flush(buf, i, out), nodes))
-                }
-            }
+            Ok(d) => Scan.settle(ctx, i, skip, close, resume, { dest: d.dest, title: d.title, ok: True }, buf, out, image)
             Err(_) => Scan.literal(ctx, i, skip, buf, out)
         }
+
+    ## A destination is in hand; scan the label once and decide.
+    ##
+    ## A link may not contain a link, so a label that produced one leaves the
+    ## outer bracket literal with the inner link intact. Its tokens are spliced
+    ## back in after the `[` and scanning resumes at the `]` — the same result
+    ## as re-scanning the label as text, without scanning it a second time. The
+    ## tokens are still DELIMITERS, not finished emphasis, so a `*` inside the
+    ## label can still pair with one outside it, as it could before.
+    settle : Scan.Ctx, U64, U64, U64, U64, { dest : Str, title : Str, ok : Bool }, Scan.Buf, List(Scan.Tk), Bool -> List(Scan.Tk)
+    settle = |ctx, i, skip, close, resume, parts, buf, out, image| {
+        label = Scan.label_tokens(ctx, i + skip, close)
+        if !image and Scan.tks_have_link(label) {
+            opener = Scan.push_all(buf, List.sublist(ctx.b, { start: i, len: skip }))
+            Scan.tokens(ctx, close, Scan.buf0(close), List.concat(Scan.flush(opener, i + skip, out), label))
+        } else {
+            nodes = Scan.link_node(i, resume, Scan.emphasis(label), parts, image)
+            Scan.tokens(ctx, resume, Scan.buf0(resume), List.concat(Scan.flush(buf, i, out), nodes))
+        }
+    }
+
+    ## The label's tokens, scanned on their own and moved to source offsets.
+    label_tokens : Scan.Ctx, U64, U64 -> List(Scan.Tk)
+    label_tokens = |ctx, from, to| {
+        tks = Scan.tokens({ b: Str.to_utf8(Scan.slice(ctx.b, from, to)), defs: ctx.defs }, 0, Scan.buf0(0), [])
+        List.map(tks, |tk| Scan.shift_tk(tk, from, to))
+    }
+
+    shift_tk : Scan.Tk, U64, U64 -> Scan.Tk
+    shift_tk = |tk, base, cap|
+        match tk {
+            Node(n) => Node(Inl.shift(n, base, cap))
+            Delim(d) => Delim({ ..d, at: d.at + base })
+        }
+
+    ## `has_link` over tokens. Emphasis is not built yet, so a link is either a
+    ## token of its own or inside an image's alt text.
+    tks_have_link : List(Scan.Tk) -> Bool
+    tks_have_link = |tks|
+        List.any(
+            tks,
+            |tk|
+                match tk {
+                    Node(n) => Scan.one_has_link(n)
+                    Delim(_) => False
+                },
+        )
 
     lookup : List(Ref.Def), Str -> Try(Ref.Def, [NotFound])
     lookup = |defs, key|
