@@ -251,18 +251,18 @@ Stack := [].{
                     ## The closing fence line belongs to the block's SOURCE span
                     ## even though it is not content — the editor reveals it under
                     ## the caret — so extend `s1` to cover it before closing.
-                    Stack.pop(Stack.set_tip(st, { ..top, s1: lo.end }))
+                    Stack.pop(Stack.with_tip(st, |o| { ..o, s1: lo.end }))
                 } else {
-                    Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, Lex.unindent(rest, f.indent))), s1: lo.end })
+                    Stack.add_line(st, Loc.seg_of(lo, Lex.unindent(rest, f.indent)), lo.end)
                 }
             Indented =>
                 if blank {
                     ## Not `""`: a blank line inside indented code keeps
                     ## whatever sits past the four spaces, and the spec compares
                     ## it exactly.
-                    Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, Lex.unindent(rest, 4))), s1: lo.end })
+                    Stack.add_line(st, Loc.seg_of(lo, Lex.unindent(rest, 4)), lo.end)
                 } else if Lex.indent(rest, 0) >= 4 {
-                    Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, Lex.unindent(rest, 4))), s1: lo.end })
+                    Stack.add_line(st, Loc.seg_of(lo, Lex.unindent(rest, 4)), lo.end)
                 } else {
                     ## Ends at the first line that is neither blank nor
                     ## indented. Re-dispatched to `starts` and NOT to `line`:
@@ -275,7 +275,7 @@ Stack := [].{
                 if ending == "BLANK" and blank {
                     Stack.pop(st)
                 } else {
-                    added = Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, rest)), s1: lo.end })
+                    added = Stack.add_line(st, Loc.seg_of(lo, rest), lo.end)
                     if Lex.html_closes(rest.trim(), ending) {
                         Stack.pop(added)
                     } else {
@@ -382,7 +382,7 @@ Stack := [].{
     push_rows = |st, rest, lo| {
         top = Stack.tip(st)
         if Stack.rows_open(top.kind) {
-            Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, rest)), s1: lo.end })
+            Stack.add_line(st, Loc.seg_of(lo, rest), lo.end)
         } else {
             Stack.push(Stack.mark_content(Stack.close_leaf(st)), Rows, [Loc.seg_of(lo, rest)], lo)
         }
@@ -392,17 +392,14 @@ Stack := [].{
     push_para = |st, rest, lo| {
         top = Stack.tip(st)
         if Stack.lazy_ok(top.kind) {
-            Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, Str.trim_start(rest))), s1: lo.end })
+            Stack.add_line(st, Loc.seg_of(lo, Str.trim_start(rest)), lo.end)
         } else {
             Stack.push(Stack.mark_content(Stack.close_leaf(st)), Para, [Loc.seg_of(lo, Str.trim_start(rest))], lo)
         }
     }
 
     push_text : List(Stack.Open), Str, Loc.Ivl -> List(Stack.Open)
-    push_text = |st, t, lo| {
-        top = Stack.tip(st)
-        Stack.set_tip(st, { ..top, text: top.text.append(Loc.seg_of(lo, t)), s1: lo.end })
-    }
+    push_text = |st, t, lo| Stack.add_line(st, Loc.seg_of(lo, t), lo.end)
 
     ## A blank line closes a paragraph and is remembered by every open list, so
     ## that content arriving afterwards can make the list loose.
@@ -630,18 +627,17 @@ Stack := [].{
     ## Pop the tip, turn it into a `Doc`, and append it to the new tip.
     pop : List(Stack.Open) -> List(Stack.Open)
     pop = |st| {
-        top = Stack.tip(st)
-        rest = List.drop_last(st, 1)
+        taken = Stack.take_tip(st)
+        top = taken.top
+        rest = taken.rest
         match top.kind {
             ## An entry does not become a `Doc`; its blocks become one entry of
             ## the list below it.
-            Entry(e) => {
-                parent = Stack.tip(rest)
-                Stack.set_tip(
+            Entry(e) =>
+                Stack.with_tip(
                     rest,
-                    { ..parent, entries: parent.entries.append({ task: e.task, start: top.s0, blocks: top.kids }), s1: Stack.max_u64(parent.s1, top.s1) },
+                    |parent| { ..parent, entries: List.append(parent.entries, { task: e.task, start: top.s0, blocks: top.kids }), s1: Stack.max_u64(parent.s1, top.s1) },
                 )
-            }
             _ =>
                 match Stack.built(top) {
                     Ok(d) => Stack.emit(rest, d)
@@ -650,15 +646,31 @@ Stack := [].{
         }
     }
 
+    ## Split the tip off the stack, each half the only holder of what it has.
+    ##
+    ## `drop_last` alone answers a slice of the same allocation, which still
+    ## holds the dropped frame and is not a list `with_tip` can change in
+    ## place, so the next `emit` copied the parent's `kids` — every block a
+    ## document closed re-copied the blocks before it. `drop_at` shortens the
+    ## list itself.
+    take_tip : List(Stack.Open) -> { top : Stack.Open, rest : List(Stack.Open) }
+    take_tip = |st|
+        if List.is_empty(st) {
+            { top: Stack.fresh(Root), rest: [] }
+        } else {
+            last = List.len(st) - 1
+            match List.replace(st, last, Stack.fresh(Root)) {
+                Ok({ list, prev }) => { top: prev, rest: List.drop_at(list, last) }
+                Err(_) => { top: Stack.fresh(Root), rest: [] }
+            }
+        }
+
     ## Pop WITHOUT building — for setext, which rewrites the paragraph it ends.
     pop_discard : List(Stack.Open) -> List(Stack.Open)
-    pop_discard = |st| List.drop_last(st, 1)
+    pop_discard = |st| Stack.take_tip(st).rest
 
     emit : List(Stack.Open), Doc -> List(Stack.Open)
-    emit = |st, d| {
-        parent = Stack.tip(st)
-        Stack.set_tip(st, { ..parent, kids: parent.kids.append(d), s1: Stack.max_u64(parent.s1, d.at.end) })
-    }
+    emit = |st, d| Stack.with_tip(st, |parent| { ..parent, kids: List.append(parent.kids, d), s1: Stack.max_u64(parent.s1, d.at.end) })
 
     max_u64 : U64, U64 -> U64
     max_u64 = |a, b| if a > b { a } else { b }
@@ -666,8 +678,30 @@ Stack := [].{
     push : List(Stack.Open), Stack.Kind, List(Loc.Seg), Loc.Ivl -> List(Stack.Open)
     push = |st, k, txt, at| List.append(st, { kind: k, kids: [], entries: [], text: txt, s0: at.start, s1: at.end })
 
-    set_tip : List(Stack.Open), Stack.Open -> List(Stack.Open)
-    set_tip = |st, o| List.append(List.drop_last(st, 1), o)
+    ## Change the tip IN PLACE. `List.update` moves the frame out of the list,
+    ## changes it and writes it back, so while `change` runs the frame is the
+    ## only holder of its lists and an append extends them where they are.
+    ##
+    ## Reading the tip with `tip` and writing it back over a `drop_last` kept
+    ## a second reference to every list in the frame, so each append copied
+    ## the whole list: every line of a paragraph or fence re-copied the lines
+    ## before it. Nothing else may hold `st` across the update, or the list
+    ## is shared again — which is why the empty case is answered first rather
+    ## than by falling back to `st`.
+    with_tip : List(Stack.Open), (Stack.Open -> Stack.Open) -> List(Stack.Open)
+    with_tip = |st, change|
+        if List.is_empty(st) {
+            [change(Stack.fresh(Root))]
+        } else {
+            match List.update(st, List.len(st) - 1, change) {
+                Ok(changed) => changed
+                Err(_) => [change(Stack.fresh(Root))]
+            }
+        }
+
+    ## One more line of the tip's text, which now reaches `end`.
+    add_line : List(Stack.Open), Loc.Seg, U64 -> List(Stack.Open)
+    add_line = |st, seg, end| Stack.with_tip(st, |o| { ..o, text: List.append(o.text, seg), s1: end })
 
     ## Build the `Doc` an open block has accumulated. `Err` means it produced
     ## nothing — an empty paragraph, or an entry, whose contents its parent takes.
