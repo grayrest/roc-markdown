@@ -50,7 +50,7 @@ Doc := { at : Loc.Ivl, node : Doc.Node }.{
             ordered : Bool,
             start : U64,
             tight : Bool,
-            entries : List({ task : [NoTask, Todo, Done], blocks : List(Doc) }),
+            entries : List(Doc.Entry),
         }),
         ## The table's raw lines, delimiter row and all.
         ##
@@ -61,6 +61,12 @@ Doc := { at : Loc.Ivl, node : Doc.Node }.{
         Html(Str),
         Rule,
     ]
+
+    ## One list entry: its GFM task marker, its blocks, and the source offset
+    ## its line starts at. `start` is what anchors a checkbox the parser has to
+    ## invent a paragraph for — an entry with no content has no block of its own
+    ## to take a location from.
+    Entry : { task : [NoTask, Todo, Done], start : U64, blocks : List(Doc) }
 
     ## Build a `Doc` from its source interval and node.
     mk : Loc.Ivl, Doc.Node -> Doc

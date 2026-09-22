@@ -177,6 +177,22 @@ LocTest := [].{
         Str.from_utf8_lossy(List.sublist(Str.to_utf8(src), { start: o.start, len: o.end - o.start }))
     }
 
+    ## The first paragraph anywhere in the tree that opens with a checkbox.
+    first_task_para : Str -> Try(Block, [NotFound])
+    first_task_para = |src|
+        List.find_first(
+            LocTest.all_blocks(Markdown.parse(src)),
+            |b|
+                match List.first(LocTest.inls_of(b)) {
+                    Ok(n) =>
+                        match n.node {
+                            Task(_) => True
+                            _ => False
+                        }
+                    Err(_) => False
+                },
+        )
+
     first : Str -> Block
     first = |src|
         match List.first(Markdown.parse(src)) {
@@ -297,3 +313,15 @@ expect LocTest.marked("> **a\n> b**").loc.content == [{ start: 2, end: 5 }, { st
 # --- (c') a paragraph that lost leading definitions starts at its text (D11b)
 
 expect LocTest.first("[a]: /1\ntext").loc.outer == { start: 8, end: 12 }
+
+# --- a synthesized checkbox sits at its entry, not at byte 0 -----------------
+
+# should_anchor_an_empty_task_item_at_its_entry: `- [ ]` with no content gets a
+# paragraph the parser invents to hold the checkbox, and that paragraph used to
+# claim byte 0 — outside its list, before the `intro` paragraph.
+expect LocTest.loc_ok("intro\n\n- [ ]")
+expect
+    match LocTest.first_task_para("intro\n\n- [ ]") {
+        Ok(b) => b.loc.outer.start == 7
+        Err(_) => False
+    }

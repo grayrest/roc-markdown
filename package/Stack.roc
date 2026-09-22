@@ -22,9 +22,6 @@ import Ents
 import Defs
 
 Stack := [].{
-    ## One finished list entry: its GFM task marker, and its blocks.
-    Ent : { task : [NoTask, Todo, Done], blocks : List(Doc) }
-
     ## What is open. Containers may hold other blocks; leaves accumulate text.
     ##
     ## The stack is always containers first and at most one leaf, last. That
@@ -54,7 +51,7 @@ Stack := [].{
         ## Finished children, for a container.
         kids : List(Doc),
         ## Finished entries, for `Bullets` only.
-        entries : List(Stack.Ent),
+        entries : List(Doc.Entry),
         ## Pending raw lines, for a leaf — each anchored to the source offset
         ## its text starts at (D9b), because by the time phase 2 reads one, the
         ## marker or prefix that displaced it is gone. `Loc.seg` measures the
@@ -642,7 +639,7 @@ Stack := [].{
                 parent = Stack.tip(rest)
                 Stack.set_tip(
                     rest,
-                    { ..parent, entries: parent.entries.append({ task: e.task, blocks: top.kids }), s1: Stack.max_u64(parent.s1, top.s1) },
+                    { ..parent, entries: parent.entries.append({ task: e.task, start: top.s0, blocks: top.kids }), s1: Stack.max_u64(parent.s1, top.s1) },
                 )
             }
             _ =>

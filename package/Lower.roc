@@ -58,7 +58,7 @@ Lower := [].{
             }
         }
 
-    collect_entries : List({ task : [NoTask, Todo, Done], blocks : List(Doc) }), List({ task : [NoTask, Todo, Done], blocks : List(Doc) }), List(Ref.Def) -> { entries : List({ task : [NoTask, Todo, Done], blocks : List(Doc) }), defs : List(Ref.Def) }
+    collect_entries : List(Doc.Entry), List(Doc.Entry), List(Ref.Def) -> { entries : List(Doc.Entry), defs : List(Ref.Def) }
     collect_entries = |entries, out, defs|
         match List.first(entries) {
             Err(_) => { entries: out, defs: defs }
@@ -66,7 +66,7 @@ Lower := [].{
                 c = Lower.collect(e.blocks, [], defs)
                 Lower.collect_entries(
                     List.drop_first(entries, 1),
-                    List.append(out, { task: e.task, blocks: c.docs }),
+                    List.append(out, { ..e, blocks: c.docs }),
                     c.defs,
                 )
             }
@@ -129,14 +129,19 @@ Lower := [].{
     inlines : List(Loc.Seg), List(Ref.Def) -> List(Inl)
     inlines = |segs, defs| Inl.project_all(Scan.run(Loc.joined(segs), defs), segs)
 
-    entry : { task : [NoTask, Todo, Done], blocks : List(Doc) }, List(Ref.Def) -> List(Block)
+    entry : Doc.Entry, List(Ref.Def) -> List(Block)
     entry = |e, defs|
-        Lower.with_task(List.map(e.blocks, |b| Lower.block(b, defs)), e.task)
+        Lower.with_task(List.map(e.blocks, |b| Lower.block(b, defs)), e.task, e.start)
 
     ## Put the checkbox back where the marker was — at the head of the entry's
     ## first paragraph.
-    with_task : List(Block), [NoTask, Todo, Done] -> List(Block)
-    with_task = |blocks, state|
+    ##
+    ## When there is no paragraph to put it in, the one invented to hold it sits
+    ## at `start`, the entry's own offset. It used to sit at byte 0, outside its
+    ## list and ahead of every block before it, which broke the ordering the
+    ## editor maps the caret by.
+    with_task : List(Block), [NoTask, Todo, Done], U64 -> List(Block)
+    with_task = |blocks, state, start|
         match state {
             NoTask => blocks
             _ => {
@@ -149,9 +154,9 @@ Lower := [].{
                                     [Block.mk(first.loc, Para(List.concat([Inl.mk(Loc.none(first.loc.outer.start), Task(done))], ns)))],
                                     List.drop_first(blocks, 1),
                                 )
-                            _ => List.concat([Block.mk(Loc.none(0), Para([Inl.mk(Loc.none(0), Task(done))]))], blocks)
+                            _ => List.concat([Block.mk(Loc.none(start), Para([Inl.mk(Loc.none(start), Task(done))]))], blocks)
                         }
-                    Err(_) => List.concat([Block.mk(Loc.none(0), Para([Inl.mk(Loc.none(0), Task(done))]))], blocks)
+                    Err(_) => List.concat([Block.mk(Loc.none(start), Para([Inl.mk(Loc.none(start), Task(done))]))], blocks)
                 }
             }
         }
