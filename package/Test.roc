@@ -362,3 +362,13 @@ expect
 expect
     Test.html("${Str.repeat("*a ", 150)}${Str.repeat(" a*", 150)}")
     == "<p>${Str.repeat("*a ", 50)}${Str.repeat("<em>a ", 100)}${Str.repeat(" a</em>", 100)}${Str.repeat(" a*", 50)}</p>\n"
+
+## --- trimming a bare URL's tail ------------------------------------------------
+##
+## An unbalanced `)` comes off a bare URL's end one at a time, and each step
+## recounted the parens over the whole candidate: `https://a` and 20,000 `)`
+## took about forty seconds.
+## should_trim_twenty_thousand_closing_parens_off_a_bare_url
+expect
+    Test.html("https://a${Str.repeat(")", 20000)}")
+    == "<p><a href=\"https://a\">https://a</a>${Str.repeat(")", 20000)}</p>\n"

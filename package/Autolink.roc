@@ -52,8 +52,15 @@ Autolink := [].{
         }
     }
 
+    ## The parens are counted ONCE, and each `)` trimmed off takes one from the
+    ## count. Recounting the candidate per `)` made `https://a` followed by
+    ## 50,000 of them quadratic. Nothing else trimmed here is a paren, so the
+    ## counts stay true as the tail shrinks.
     trim_tail : List(U8), U64, U64 -> U64
-    trim_tail = |b, i, n|
+    trim_tail = |b, i, n| Autolink.trim_from(b, i, n, Autolink.count_byte(b, i, n, 40), Autolink.count_byte(b, i, n, 41))
+
+    trim_from : List(U8), U64, U64, U64, U64 -> U64
+    trim_from = |b, i, n, opens, closes|
         if n == 0 {
             0
         } else {
@@ -62,12 +69,11 @@ Autolink := [].{
             ## stripping it as punctuation destroyed the `&name;` this is
             ## looking for.
             if last == 59 and Autolink.entity_tail(b, i, n) > 0 {
-                Autolink.trim_tail(b, i, n - Autolink.entity_tail(b, i, n))
+                Autolink.trim_from(b, i, n - Autolink.entity_tail(b, i, n), opens, closes)
             } else if last == 46 or last == 44 or last == 58 or last == 59 or last == 33 or last == 63 or last == 34 or last == 39 {
-                Autolink.trim_tail(b, i, n - 1)
-            } else if last == 41 and Autolink.count_byte(b, i, n, 41) > Autolink.count_byte(b, i, n, 40) {
-                Autolink.trim_tail(b, i, n - 1)
-
+                Autolink.trim_from(b, i, n - 1, opens, closes)
+            } else if last == 41 and closes > opens {
+                Autolink.trim_from(b, i, n - 1, opens, closes - 1)
             } else {
                 n
             }
