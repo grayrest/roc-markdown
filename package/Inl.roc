@@ -84,28 +84,6 @@ Inl := { loc : Loc.T, node : Inl.Node }.{
         Inl.{ loc: Loc.project(segs, i.loc.outer.start, i.loc.outer.end), node }
     }
 
-    ## Shift a subtree's locations by `base`, clamping to `cap`. Both offsets are
-    ## in the SAME payload, so no line table is involved and none is needed.
-    ##
-    ## Nothing in the package calls it now: `Scan` used it to lift a link
-    ## label's inlines into the enclosing scan, and a label is scanned in place
-    ## since, on its paragraph's own offsets. It stays because `Inl` is exposed.
-    shift_all : List(Inl), U64, U64 -> List(Inl)
-    shift_all = |ks, base, cap| List.map(ks, |k| Inl.shift(k, base, cap))
-
-    shift : Inl, U64, U64 -> Inl
-    shift = |i, base, cap| {
-        node = match i.node {
-            Emph(ks) => Emph(Inl.shift_all(ks, base, cap))
-            Strong(ks) => Strong(Inl.shift_all(ks, base, cap))
-            Strike(ks) => Strike(Inl.shift_all(ks, base, cap))
-            Link(l) => Link({ ..l, kids: Inl.shift_all(l.kids, base, cap) })
-            Image(m) => Image({ ..m, kids: Inl.shift_all(m.kids, base, cap) })
-            other => other
-        }
-        Inl.{ loc: Loc.shift(i.loc, base, cap), node }
-    }
-
     ## The concatenated text of a subtree, used for an image's alt attribute —
     ## the spec renders `![*a*](u)` as `alt="a"`, markup discarded.
     text_of : List(Inl) -> Str
