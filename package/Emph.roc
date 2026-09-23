@@ -26,6 +26,20 @@ Emph := [].{
 
     Floor : { kind : Emph.Kind, at : U64 }
 
+    ## An entry of the pairing stack: a token, and how many emphasis nodes deep
+    ## it is — 0 for a delimiter or a scanned node, one more than its deepest
+    ## child for a node `join` built.
+    Slot : { tk : Emph.Tk, depth : U64 }
+
+    ## How deeply emphasis may nest. A pairing that would go deeper leaves its
+    ## closer as text, like one with no opener.
+    ##
+    ## Every walk of the inline tree recurses once per level, and a run of
+    ## 20,000 `*` either side of a word nests 10,000 `Strong`s in linear time,
+    ## which overflowed the stack as a SIGSEGV. Real text nests two or three.
+    max_depth : U64
+    max_depth = 100
+
     ## Whether a delimiter run can open, close, both or neither.
     ##
     ## Left-flanking means "not followed by whitespace, and either not followed
@@ -136,50 +150,75 @@ Emph := [].{
     emphasis : List(Emph.Tk) -> List(Inl)
     emphasis = |tks| Emph.emph_walk(tks, 0, [], [])
 
+    slot : Emph.Tk -> Emph.Slot
+    slot = |tk| { tk, depth: 0 }
+
     ## `floors` is cmark's openers-bottom: for each kind of closer
     ## (`Emph.Kind`), no stack entry below its floor is an opener that kind
     ## could take, because an earlier closer of the kind walked down there and
     ## found none. Whether an opener suits a closer depends only on the
     ## closer's kind, so the next closer of that kind stops at the floor
     ## instead of walking to the bottom again.
-    emph_walk : List(Emph.Tk), U64, List(Emph.Tk), List(Emph.Floor) -> List(Inl)
+    emph_walk : List(Emph.Tk), U64, List(Emph.Slot), List(Emph.Floor) -> List(Inl)
     emph_walk = |tks, i, stack, floors|
         match List.get(tks, i) {
             Ok(Delim(d)) =>
                 if d.closer {
                     Emph.close_with(tks, i, d, stack, floors)
                 } else {
-                    Emph.emph_walk(tks, i + 1, List.append(stack, Delim(d)), floors)
+                    Emph.emph_walk(tks, i + 1, List.append(stack, Emph.slot(Delim(d))), floors)
                 }
-            Ok(tk) => Emph.emph_walk(tks, i + 1, List.append(stack, tk), floors)
-            Err(_) => List.join(List.map(stack, Emph.leftover))
+            Ok(tk) => Emph.emph_walk(tks, i + 1, List.append(stack, Emph.slot(tk)), floors)
+            Err(_) => List.join(List.map(stack, |s| Emph.leftover(s.tk)))
         }
 
     ## Pair closer `c` (token `i`) with the nearest opener it can take, or
     ## demote it. A closer longer than what one pairing consumes is paired
     ## again with what is left, so `***a***` becomes strong-inside-em.
-    close_with : List(Emph.Tk), U64, Emph.Run, List(Emph.Tk), List(Emph.Floor) -> List(Inl)
+    ##
+    ## A pairing that would nest past `max_depth` is refused the same way, and
+    ## the floor it sets is as true: every opener below `oi` would wrap the
+    ## same too-deep node, and joins above `oi` only ever deepen it.
+    close_with : List(Emph.Tk), U64, Emph.Run, List(Emph.Slot), List(Emph.Floor) -> List(Inl)
     close_with = |tks, i, c, stack, floors| {
         kind = Emph.kind_of(c)
         match Emph.opener_walk(stack, c, List.len(stack), Emph.floor_of(floors, kind)) {
             Ok(oi) => {
-                joined = Emph.join(stack, oi, c)
-                ## The stack from `oi` up was rebuilt, so a floor above it no
-                ## longer indexes the entry it did. Clamping keeps each claim
-                ## true: nothing below `oi` moved.
-                clamped = Emph.clamp_floors(floors, oi)
-                if joined.rest.n > 0 {
-                    Emph.close_with(tks, i, joined.rest, joined.stack, clamped)
+                depth = Emph.depth_above(stack, oi) + 1
+                if depth > Emph.max_depth {
+                    Emph.demote(tks, i, c, stack, floors)
                 } else {
-                    Emph.emph_walk(tks, i + 1, joined.stack, clamped)
+                    joined = Emph.join(stack, oi, c, depth)
+                    ## The stack from `oi` up was rebuilt, so a floor above it no
+                    ## longer indexes the entry it did. Clamping keeps each claim
+                    ## true: nothing below `oi` moved.
+                    clamped = Emph.clamp_floors(floors, oi)
+                    if joined.rest.n > 0 {
+                        Emph.close_with(tks, i, joined.rest, joined.stack, clamped)
+                    } else {
+                        Emph.emph_walk(tks, i + 1, joined.stack, clamped)
+                    }
                 }
             }
-            ## A closer with no opener cannot stay a closer. It keeps its
-            ## opener flag: a run that can both open and close still opens.
-            Err(_) =>
-                Emph.emph_walk(tks, i + 1, List.append(stack, Delim({ ..c, closer: False })), Emph.set_floor(floors, kind, List.len(stack)))
+            Err(_) => Emph.demote(tks, i, c, stack, floors)
         }
     }
+
+    ## A closer with no opener it may take cannot stay a closer. It keeps its
+    ## opener flag: a run that can both open and close still opens.
+    demote : List(Emph.Tk), U64, Emph.Run, List(Emph.Slot), List(Emph.Floor) -> List(Inl)
+    demote = |tks, i, c, stack, floors|
+        Emph.emph_walk(
+            tks,
+            i + 1,
+            List.append(stack, Emph.slot(Delim({ ..c, closer: False }))),
+            Emph.set_floor(floors, Emph.kind_of(c), List.len(stack)),
+        )
+
+    ## The deepest nesting among the stack entries above `oi` — what a node
+    ## wrapping them would sit on.
+    depth_above : List(Emph.Slot), U64 -> U64
+    depth_above = |stack, oi| List.fold(List.drop_first(stack, oi + 1), 0, |m, s| if s.depth > m { s.depth } else { m })
 
     kind_of : Emph.Run -> Emph.Kind
     kind_of = |d| { ch: d.ch, both: d.both, rem: d.n % 3 }
@@ -201,13 +240,13 @@ Emph := [].{
     ## character. The "rule of three" is applied: when either side can both
     ## open and close, a pairing whose combined length is a multiple of 3 is
     ## rejected unless both lengths are. Without it `**foo*bar**` mis-nests.
-    opener_walk : List(Emph.Tk), Emph.Run, U64, U64 -> Try(U64, [NotFound])
+    opener_walk : List(Emph.Slot), Emph.Run, U64, U64 -> Try(U64, [NotFound])
     opener_walk = |stack, c, j, floor|
         if j <= floor {
             Err(NotFound)
         } else {
             k = j - 1
-            match List.get(stack, k) {
+            match List.get(stack, k).map_ok(|s| s.tk) {
                 Ok(Delim(o)) =>
                     if o.opener and o.ch == c.ch and Emph.rule_of_three(o, c) {
                         Ok(k)
@@ -236,17 +275,18 @@ Emph := [].{
     ## `n` 0 when nothing is) goes back to `close_with`.
     ##
     ## The stack is cut with `drop_last` after the inner nodes are copied out,
-    ## so a unique stack is shortened in place rather than rebuilt.
-    join : List(Emph.Tk), U64, Emph.Run -> { stack : List(Emph.Tk), rest : Emph.Run }
-    join = |stack, oi, c|
-        match List.get(stack, oi) {
+    ## so a unique stack is shortened in place rather than rebuilt. `depth` is
+    ## the new node's, which `close_with` has already checked.
+    join : List(Emph.Slot), U64, Emph.Run, U64 -> { stack : List(Emph.Slot), rest : Emph.Run }
+    join = |stack, oi, c, depth|
+        match List.get(stack, oi).map_ok(|s| s.tk) {
             Ok(Delim(o)) => {
                 take = if o.n >= 2 and c.n >= 2 {
                     2
                 } else {
                     1
                 }
-                inner = List.join(List.map(List.drop_first(stack, oi + 1), Emph.leftover))
+                inner = List.join(List.map(List.drop_first(stack, oi + 1), |s| Emph.leftover(s.tk)))
                 node = if c.ch == 126 {
                     Strike(inner)
                 } else if take == 2 {
@@ -256,21 +296,21 @@ Emph := [].{
                 }
                 base = List.drop_last(stack, List.len(stack) - oi)
                 kept = List.concat(base, Emph.keep(o, o.n - take, o.at))
-                emph = Node(Inl.at(o.at + (o.n - take), c.at + take, node))
+                emph = { tk: Node(Inl.at(o.at + (o.n - take), c.at + take, node)), depth }
                 { stack: List.append(kept, emph), rest: { ..c, n: c.n - take, at: c.at + take } }
             }
             ## `opener_walk` only answers with a delimiter, so this is not
             ## reached; the closer is left unconsumed rather than looping.
-            _ => { stack: List.append(stack, Delim({ ..c, closer: False })), rest: { ..c, n: 0 } }
+            _ => { stack: List.append(stack, Emph.slot(Delim({ ..c, closer: False }))), rest: { ..c, n: 0 } }
         }
 
     ## What is left of a partially consumed run.
-    keep : Emph.Run, U64, U64 -> List(Emph.Tk)
+    keep : Emph.Run, U64, U64 -> List(Emph.Slot)
     keep = |d, n, pos|
         if n == 0 {
             []
         } else {
-            [Delim({ ..d, n, at: pos })]
+            [Emph.slot(Delim({ ..d, n, at: pos }))]
         }
 
     leftover : Emph.Tk -> List(Inl)

@@ -53,6 +53,7 @@ Test := [].{
             Table(t) => "T${t.ncols.to_str()}x${(List.len(t.cells) // Test.at_least_one(t.ncols)).to_str()}"
             Para(_) => "P"
             Quote(bs) => "Q(${Str.join_with(List.map(bs, Test.kind), "|")})"
+            Items(l) => "L(${Str.join_with(List.map(l.entries, |e| Str.join_with(List.map(e, Test.kind), "+")), ",")})"
             _ => "B"
         }
 
@@ -341,3 +342,23 @@ expect Test.tree("*a* *b* **c**") == "E[a] E[b] S[c]"
 ## paragraph of about 6k escapes (or lines, or links) overflowed it.
 ## should_scan_a_paragraph_of_twenty_thousand_escapes
 expect Test.html(Str.repeat("\\*", 20000)) == "<p>${Str.repeat("*", 20000)}</p>\n"
+
+## --- nesting past the cap -------------------------------------------------------
+##
+## Every walk of the finished tree recurses once per level, and nothing bounded
+## the levels: a line of 2000 `> ` or `- `, or 20,000 `*` either side of a
+## word, overflowed the stack as a SIGSEGV. Past the cap a marker is text.
+## should_stop_nesting_quotes_at_the_cap
+expect Test.outline(Str.repeat("> ", 2000)) == "${Str.repeat("Q(", 100)}P${Str.repeat(")", 100)}"
+## should_stop_nesting_lists_at_the_cap
+expect Test.outline("${Str.repeat("- ", 2000)}a") == "${Str.repeat("L(", 50)}P${Str.repeat(")", 50)}"
+## should_stop_nesting_emphasis_at_the_cap
+expect
+    Test.html("${Str.repeat("*", 20000)}a${Str.repeat("*", 20000)}")
+    == "<p>${Str.repeat("*", 19800)}${Str.repeat("<strong>", 100)}a${Str.repeat("</strong>", 100)}${Str.repeat("*", 19800)}</p>\n"
+## Separate runs nest the same way, one level per pair; past the cap each
+## closer is text, and the floor it sets keeps the rest from searching.
+## should_stop_nesting_separate_emphasis_runs_at_the_cap
+expect
+    Test.html("${Str.repeat("*a ", 150)}${Str.repeat(" a*", 150)}")
+    == "<p>${Str.repeat("*a ", 50)}${Str.repeat("<em>a ", 100)}${Str.repeat(" a</em>", 100)}${Str.repeat(" a*", 50)}</p>\n"

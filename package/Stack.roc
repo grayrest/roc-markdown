@@ -337,7 +337,7 @@ Stack := [].{
                 Stack.mark_content(Stack.close_leaf(st)),
                 Doc.mk(lo, Heading(Headings.atx_level(t), [Loc.seg(lo, Headings.atx_tail(rest), Headings.atx_text(t))])),
             )
-        } else if ind < 4 and t.starts_with(">") {
+        } else if ind < 4 and t.starts_with(">") and Stack.has_room(st, 1) {
             match Stack.strip_quote(rest) {
                 Ok(inner) =>
                     Stack.starts(
@@ -348,7 +348,7 @@ Stack := [].{
                     )
                 Err(_) => Stack.push_para(st, rest, lo)
             }
-        } else if ind < 4 and Stack.is_marker(rest, !para_open) {
+        } else if ind < 4 and Stack.is_marker(rest, !para_open) and Stack.has_room(st, Stack.list_cost) {
             Stack.open_entry(st, rest, lo)
         } else if Stack.rows_open(top.kind) or (ind < 4 and t.starts_with("|")) {
             Stack.push_rows(st, rest, lo)
@@ -363,7 +363,41 @@ Stack := [].{
     marker_ahead = |st, rest| {
         top = Stack.tip(st)
         para_open = Stack.lazy_ok(top.kind) and !List.is_empty(top.text)
-        Lex.indent(rest, 0) < 4 and !Lex.is_rule(rest.trim()) and Stack.is_marker(rest, !para_open)
+        Lex.indent(rest, 0) < 4
+        and !Lex.is_rule(rest.trim())
+        and Stack.is_marker(rest, !para_open)
+        and Stack.has_room(st, Stack.list_cost)
+    }
+
+    ## How many containers may be open at once. Past it, a `>` or a list
+    ## marker is text in the innermost one.
+    ##
+    ## Every walk of the finished tree — lowering, HTML, a native renderer —
+    ## recurses once per level, and nothing else bounds the levels: a line of
+    ## 2000 `> ` overflowed the stack as a SIGSEGV. A hundred is what
+    ## markdown-it allows (`maxNesting`); a document nests a handful.
+    max_containers : U64
+    max_containers = 100
+
+    ## A list level opens two containers: the list, and its entry.
+    list_cost : U64
+    list_cost = 2
+
+    ## Can `n` more containers open here? Counted without the root and without
+    ## an open leaf, which the new container would close.
+    ##
+    ## `marker_ahead` asks this too, and must: a marker refused here but
+    ## counted as a sibling there would keep a dangling list open, and the
+    ## paragraph it becomes would land in the list's `kids`, which nothing
+    ## reads.
+    has_room : List(Stack.Open), U64 -> Bool
+    has_room = |st, n| {
+        leaf = if Stack.is_leaf(Stack.tip(st).kind) {
+            1
+        } else {
+            0
+        }
+        List.len(st) - leaf - 1 + n <= Stack.max_containers
     }
 
     close_dangling : List(Stack.Open) -> List(Stack.Open)
