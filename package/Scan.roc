@@ -34,9 +34,20 @@ Scan := [].{
     ##  - `tick_last`: for each backtick run length `n`, one past where the last
     ##    run of exactly `n` starts (index `n - 1`, 0 for none). A code span
     ##    opened at or beyond it cannot close.
+    ##
+    ## A closer that DOES exist is no help to those, so the rest are learned
+    ## during the scan, from searches that have already run:
+    ##
     ##  - `email_dead`: a position below which every word boundary is known not
-    ##    to start an email — see the email branch of `tokens`. The one fact
-    ##    learned DURING the scan rather than before it.
+    ##    to start an email — see the email branch of `tokens`.
+    ##  - `cdata_end`: a CDATA body starting at or past it has no `]]>` after
+    ##    it. It starts at the end of the text and moves down to where a search
+    ##    failed, since one that finds nothing from there finds nothing later.
+    ##  - `brackets`: the `]` closing each bracket a walk has passed, or that
+    ##    none does (`Link.match_bracket`).
+    ##
+    ## `tokens` learns `email_dead` itself; `angle` and `bracket` learn the
+    ## other two and hand them back (`Learned`).
     Ctx : {
         b : List(U8),
         defs : Ref.Index,
@@ -45,6 +56,8 @@ Scan := [].{
         rb_end : U64,
         tick_last : List(U64),
         email_dead : U64,
+        cdata_end : U64,
+        brackets : Link.Known,
     }
 
     context : List(U8), Ref.Index -> Scan.Ctx
@@ -60,6 +73,8 @@ Scan := [].{
             []
         },
         email_dead: 0,
+        cdata_end: List.len(b),
+        brackets: Dict.empty(),
     }
 
     ## One past the last `c` before `i`, or 0 when there is none.
@@ -131,6 +146,12 @@ Scan := [].{
     ## or escapes overflowed the 8 MB stack.
     Step : { i : U64, buf : Scan.Buf, out : List(Emph.Tk) }
 
+    ## A step taken with what it learned about the text on the way.
+    Learned : { i : U64, buf : Scan.Buf, out : List(Emph.Tk), ctx : Scan.Ctx }
+
+    learned : Scan.Ctx, Scan.Step -> Scan.Learned
+    learned = |ctx, st| { i: st.i, buf: st.buf, out: st.out, ctx }
+
     tokens : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> List(Emph.Tk)
     tokens = |ctx, i, buf, out|
         if i >= ctx.end {
@@ -176,13 +197,13 @@ Scan := [].{
                 Scan.tokens(ctx, st.i, st.buf, st.out)
             } else if c == 60 {
                 st = Scan.angle(ctx, i, buf, out)
-                Scan.tokens(ctx, st.i, st.buf, st.out)
+                Scan.tokens(st.ctx, st.i, st.buf, st.out)
             } else if c == 91 {
                 st = Scan.bracket(ctx, i, 1, buf, out, False)
-                Scan.tokens(ctx, st.i, st.buf, st.out)
+                Scan.tokens(st.ctx, st.i, st.buf, st.out)
             } else if c == 33 and Bytes.at(ctx.b, i + 1) == 91 {
                 st = Scan.bracket(ctx, i, 2, buf, out, True)
-                Scan.tokens(ctx, st.i, st.buf, st.out)
+                Scan.tokens(st.ctx, st.i, st.buf, st.out)
             } else if c == 42 or c == 95 or c == 126 {
                 n = Bytes.run_len(ctx.b, i, c, 0)
                 flags = Emph.flanking(ctx.b, i, n, c)
@@ -304,59 +325,79 @@ Scan := [].{
     ## splices them back as text. Scanning it up front and again on the way to
     ## a literal made nested brackets exponential — each level scanned its label
     ## twice, so `[[[…a](u)…](u)](u)` doubled in cost per level.
-    bracket : Scan.Ctx, U64, U64, Scan.Buf, List(Emph.Tk), Bool -> Scan.Step
-    bracket = |ctx, i, skip, buf, out, image|
-        match Scan.close_of(ctx, i + skip) {
+    bracket : Scan.Ctx, U64, U64, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
+    bracket = |ctx, i, skip, buf, out, image| {
+        first = Scan.close_of(ctx, i + skip)
+        match first.close {
             Ok(close) =>
                 if Bytes.at(ctx.b, close + 1) == 91 {
                     ## `[text][label]` and `[label][]` — a REFERENCE. An empty
                     ## second bracket means "use the first as the label", which
                     ## is why this cannot just read the second one.
-                    match Scan.close_of(ctx, close + 2) {
-                        Ok(rclose) => {
-                            written = Bytes.slice(ctx.b, close + 2, rclose)
-                            key = if Str.is_empty(written) {
-                                Bytes.slice(ctx.b, i + skip, close)
-                            } else {
-                                written
+                    second = Scan.close_of(first.ctx, close + 2)
+                    Scan.learned(
+                        second.ctx,
+                        match second.close {
+                            Ok(rclose) => {
+                                written = Bytes.slice(ctx.b, close + 2, rclose)
+                                key = if Str.is_empty(written) {
+                                    Bytes.slice(ctx.b, i + skip, close)
+                                } else {
+                                    written
+                                }
+                                Scan.resolve(second.ctx, i, skip, close, rclose + 1, key, buf, out, image)
                             }
-                            Scan.resolve(ctx, i, skip, close, rclose + 1, key, buf, out, image)
-                        }
-                        Err(_) => Scan.literal(ctx, i, skip, buf, out)
-                    }
-                } else if Bytes.at(ctx.b, close + 1) != 40 {
-                    ## `[label]` alone — a SHORTCUT reference. Falls back to
-                    ## literal text when no definition matches, which is what
-                    ## keeps `[not a link]` readable.
-                    Scan.resolve(ctx, i, skip, close, close + 1, Bytes.slice(ctx.b, i + skip, close), buf, out, image)
+                            Err(_) => Scan.literal(ctx, i, skip, buf, out)
+                        },
+                    )
                 } else {
-                    match Link.match_paren(ctx.b, close + 2, 1) {
-                        Ok(pclose) => {
-                            parts = Link.dest_title(Bytes.slice(ctx.b, close + 2, pclose))
-                            if parts.ok {
-                                Scan.settle(ctx, i, skip, close, pclose + 1, parts, buf, out, image)
-                            } else {
-                                ## `[foo](not a link)` is a shortcut reference
-                                ## followed by literal text, not text throughout
-                                ## — so a bad inline destination retries as one
-                                ## rather than giving up.
-                                Scan.resolve(ctx, i, skip, close, close + 1, Bytes.slice(ctx.b, i + skip, close), buf, out, image)
-                            }
-                        }
-                        Err(_) => Scan.literal(ctx, i, skip, buf, out)
+                    Scan.learned(first.ctx, Scan.inline_or_shortcut(first.ctx, i, skip, close, buf, out, image))
+                }
+            Err(_) => Scan.learned(first.ctx, Scan.literal(ctx, i, skip, buf, out))
+        }
+    }
+
+    ## The bracket closed at `close` and no second bracket follows: an inline
+    ## link if `(` does, a shortcut reference otherwise.
+    inline_or_shortcut : Scan.Ctx, U64, U64, U64, Scan.Buf, List(Emph.Tk), Bool -> Scan.Step
+    inline_or_shortcut = |ctx, i, skip, close, buf, out, image|
+        if Bytes.at(ctx.b, close + 1) != 40 {
+            ## `[label]` alone — a SHORTCUT reference. Falls back to
+            ## literal text when no definition matches, which is what
+            ## keeps `[not a link]` readable.
+            Scan.resolve(ctx, i, skip, close, close + 1, Bytes.slice(ctx.b, i + skip, close), buf, out, image)
+        } else {
+            match Link.match_paren(ctx.b, close + 2, 1) {
+                Ok(pclose) => {
+                    parts = Link.dest_title(Bytes.slice(ctx.b, close + 2, pclose))
+                    if parts.ok {
+                        Scan.settle(ctx, i, skip, close, pclose + 1, parts, buf, out, image)
+                    } else {
+                        ## `[foo](not a link)` is a shortcut reference
+                        ## followed by literal text, not text throughout
+                        ## — so a bad inline destination retries as one
+                        ## rather than giving up.
+                        Scan.resolve(ctx, i, skip, close, close + 1, Bytes.slice(ctx.b, i + skip, close), buf, out, image)
                     }
                 }
-            Err(_) => Scan.literal(ctx, i, skip, buf, out)
+                Err(_) => Scan.literal(ctx, i, skip, buf, out)
+            }
         }
 
     ## The `]` closing a bracket whose content starts at `from` — answered
-    ## without a search when no `]` is left in the text.
-    close_of : Scan.Ctx, U64 -> Try(U64, [NotFound])
+    ## without a search when no `]` is left in the text, or when a walk has
+    ## already passed this bracket (`ctx.brackets`).
+    close_of : Scan.Ctx, U64 -> { close : Try(U64, [NotFound]), ctx : Scan.Ctx }
     close_of = |ctx, from|
         if from >= ctx.rb_end {
-            Err(NotFound)
-        } else {
-            Link.match_bracket(ctx.b, from, 1)
+            { close: Err(NotFound), ctx }
+        } else
+        match Dict.get(ctx.brackets, from) {
+            Ok(known) => { close: known, ctx }
+            Err(_) => {
+                walk = Link.match_bracket(ctx.b, from, ctx.gt_end, ctx.brackets)
+                { close: walk.close, ctx: { ..ctx, brackets: walk.known } }
+            }
         }
 
     ## Look the label up and build the node, or fall back to literal text.
@@ -416,20 +457,35 @@ Scan := [].{
     ## well-formed tag becomes a `Raw` node. Anything else in angle brackets is
     ## left literal. Whether raw HTML reaches the output is the LOWERING's
     ## decision (see the tag branch below), not the scanner's.
-    angle : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
+    angle : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Learned
     angle = |ctx, i, buf, out|
         if i + 1 >= ctx.gt_end {
             ## No `>` anywhere after this, so nothing here can close.
-            { i: i + 1, buf: Scan.push(buf, 60), out: out }
+            Scan.learned(ctx, { i: i + 1, buf: Scan.push(buf, 60), out: out })
         } else if Bytes.starts(ctx.b, i, "<![CDATA[") {
-            ## CDATA ends at `]]>`, and its body may contain `>` — searching for
-            ## the first one cut it in half.
-            match Bytes.find_cdata(ctx.b, i + 9) {
-                Ok(close) =>
-                    { i: close + 3, buf: Scan.buf0(close + 3), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 3, Raw(Bytes.slice(ctx.b, i, close + 3))))) }
-                Err(_) => { i: i + 1, buf: Scan.push(buf, 60), out: out }
-            }
+            Scan.cdata(ctx, i, buf, out)
+        } else {
+            Scan.learned(ctx, Scan.tag(ctx, i, buf, out))
+        }
+
+    ## CDATA ends at `]]>`, and its body may contain `>` — searching for the
+    ## first one cut it in half.
+    cdata : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Learned
+    cdata = |ctx, i, buf, out| {
+        body = i + 9
+        lt = { i: i + 1, buf: Scan.push(buf, 60), out: out }
+        if body >= ctx.cdata_end {
+            Scan.learned(ctx, lt)
         } else
+        match Bytes.find_cdata(ctx.b, body) {
+            Ok(close) =>
+                Scan.learned(ctx, { i: close + 3, buf: Scan.buf0(close + 3), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 3, Raw(Bytes.slice(ctx.b, i, close + 3))))) })
+            Err(_) => Scan.learned({ ..ctx, cdata_end: body }, lt)
+        }
+    }
+
+    tag : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
+    tag = |ctx, i, buf, out|
         match Tag.find_tag_end(ctx.b, i + 1) {
             Ok(close) => {
                 inner = Bytes.slice(ctx.b, i + 1, close)

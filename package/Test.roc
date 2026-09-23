@@ -386,3 +386,18 @@ expect {
     links = Str.join_with(List.map(labels, |k| "<a href=\"/${k}\">${k}</a>"), " ")
     Test.html("${defs}\n\n${refs}") == "<p>${links}</p>\n"
 }
+
+## --- openers before one closer -------------------------------------------------
+##
+## Knowing that no `>` or `]` is left answers an unmatched opener only when
+## there is no closer at all. One closer at the end of the paragraph put every
+## opener back to searching up to it, and each `<` then sliced and checked
+## everything in between.
+## should_scan_twenty_thousand_tag_openers_before_one_closer
+expect Test.html("${Str.repeat("<a", 20000)}>") == "<p>${Str.repeat("&lt;a", 19999)}<!-- raw HTML omitted --></p>\n"
+## should_scan_thirty_thousand_bracket_openers_before_one_closer
+expect Test.html("${Str.repeat("[", 30000)}]") == "<p>${Str.repeat("[", 30000)}]</p>\n"
+## should_scan_a_label_of_twenty_thousand_tag_openers
+expect Test.html("[${Str.repeat("<a", 20000)}>]") == "<p>[${Str.repeat("&lt;a", 19999)}<!-- raw HTML omitted -->]</p>\n"
+## should_scan_ten_thousand_cdata_openers_before_one_closer
+expect Test.html("a ${Str.repeat("<![CDATA[", 10000)}>") == "<p>a ${Str.repeat("&lt;![CDATA[", 10000)}&gt;</p>\n"

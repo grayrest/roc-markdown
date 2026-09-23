@@ -39,21 +39,37 @@ Tag := [].{
     ## The `>` that closes a tag, skipping quoted attribute values — one inside
     ## `bam = 'baz <em>"</em>'` closes nothing, and stopping at it cut the tag
     ## in half.
+    ##
+    ## Only a declaration or an instruction (`<!…>`, `<?…>`) searches all the
+    ## way. Anything else gives up at a `<` outside quotes: inside `<…>` that
+    ## one fails every test `Scan.angle` makes of it — not an autolink or an
+    ## email, which may hold no `<`, and not a tag, whose grammar admits one
+    ## only inside a quoted value, paired exactly as this pairs them. Searching
+    ## on to the `>` found the answer no sooner, and `"<a" * 30_000 + ">"`
+    ## searched from every `<` to the one at the end.
     find_tag_end : List(U8), U64 -> Try(U64, [NotFound])
-    find_tag_end = |b, i|
+    find_tag_end = |b, i| {
+        c = Bytes.at(b, i)
+        Tag.close_walk(b, i, !(c == 33 or c == 63))
+    }
+
+    close_walk : List(U8), U64, Bool -> Try(U64, [NotFound])
+    close_walk = |b, i, lt_ends|
         if i >= List.len(b) {
             Err(NotFound)
         } else {
             c = Bytes.at(b, i)
             if c == 34 or c == 39 {
                 match Bytes.find_byte(b, i + 1, c) {
-                    Ok(close) => Tag.find_tag_end(b, close + 1)
+                    Ok(close) => Tag.close_walk(b, close + 1, lt_ends)
                     Err(_) => Err(NotFound)
                 }
             } else if c == 62 {
                 Ok(i)
+            } else if c == 60 and lt_ends {
+                Err(NotFound)
             } else {
-                Tag.find_tag_end(b, i + 1)
+                Tag.close_walk(b, i + 1, lt_ends)
             }
         }
 

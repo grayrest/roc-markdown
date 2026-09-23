@@ -158,49 +158,146 @@ Link := [].{
             t
         }
 
-    match_bracket : List(U8), U64, U64 -> Try(U64, [NotFound])
-    match_bracket = |b, i, depth|
+    ## What bracket walks have learned, by where a bracket's content starts:
+    ## the `]` that closes it, or that none does.
+    Known : Dict(U64, Try(U64, [NotFound]))
+
+    ## The `]` closing the bracket whose content starts at `from`, by balanced
+    ## counting, and `known` grown by the answer for every `[` the walk passed.
+    ##
+    ## The walk is a pure function of where it is, and a `[` it passes at depth
+    ## `d` closes exactly where the walk next returns to `d`, so each answer is
+    ## what a walk of its own would find. That is cmark's bracket stack
+    ## reached another way: `"[" * 30_000 + "]"` walks once rather than from
+    ## every `[` to the `]` at the end. A `[` whose answer is already known is
+    ## stepped over, or ends the walk when nothing closes it.
+    ##
+    ## `gt_end` is one past the last `>` in `b` (`opaque_end`).
+    match_bracket : List(U8), U64, U64, Link.Known -> { close : Try(U64, [NotFound]), known : Link.Known }
+    match_bracket = |b, from, gt_end, known| {
+        walk = Link.bracket_walk(b, from, [], gt_end, known)
+        { close: walk.close, known: Dict.insert(walk.known, from, walk.close) }
+    }
+
+    ## `open` holds the content start of every `[` passed and not yet closed,
+    ## innermost last.
+    bracket_walk : List(U8), U64, List(U64), U64, Link.Known -> { close : Try(U64, [NotFound]), known : Link.Known }
+    bracket_walk = |b, i, open, gt_end, known|
         if i >= List.len(b) {
-            Err(NotFound)
+            Link.unclosed(open, known)
         } else {
             c = Bytes.at(b, i)
             if c == 92 {
-                Link.match_bracket(b, i + 2, depth)
+                Link.bracket_walk(b, i + 2, open, gt_end, known)
             } else if c == 96 {
                 ## A code span outranks a bracket, so its contents are opaque —
                 ## `[foo`](/uri)`` is a bracket followed by code, not a link.
                 n = Bytes.run_len(b, i, 96, 0)
                 match Bytes.find_run(b, i + n, 96, n) {
-                    Ok(close) => Link.match_bracket(b, close + n, depth)
-                    Err(_) => Link.match_bracket(b, i + n, depth)
+                    Ok(close) => Link.bracket_walk(b, close + n, open, gt_end, known)
+                    Err(_) => Link.bracket_walk(b, i + n, open, gt_end, known)
                 }
             } else if c == 60 {
-                ## A raw tag or an autolink is opaque to bracket matching, so
-                ## `[foo <bar attr="](baz)">` does not close at the `]` sitting
-                ## inside an attribute value.
-                match Bytes.find_byte(b, i + 1, 62) {
-                    Ok(gt) => {
-                        inner = Bytes.slice(b, i + 1, gt)
-                        if Tag.is_tag(inner) or Autolink.is_autolink(inner) {
-                            Link.match_bracket(b, gt + 1, depth)
-                        } else {
-                            Link.match_bracket(b, i + 1, depth)
-                        }
-                    }
-                    Err(_) => Link.match_bracket(b, i + 1, depth)
+                match Link.opaque_end(b, i, gt_end) {
+                    Ok(gt) => Link.bracket_walk(b, gt + 1, open, gt_end, known)
+                    Err(_) => Link.bracket_walk(b, i + 1, open, gt_end, known)
                 }
             } else if c == 91 {
-                Link.match_bracket(b, i + 1, depth + 1)
+                match Dict.get(known, i + 1) {
+                    Ok(Ok(close)) => Link.bracket_walk(b, close + 1, open, gt_end, known)
+                    ## This `[` never closes, and every bracket around it
+                    ## would have to close after it did.
+                    Ok(Err(_)) => Link.unclosed(open, known)
+                    Err(_) => Link.bracket_walk(b, i + 1, List.append(open, i + 1), gt_end, known)
+                }
             } else if c == 93 {
-                if depth == 1 {
-                    Ok(i)
-                } else {
-                    Link.match_bracket(b, i + 1, depth - 1)
+                match List.last(open) {
+                    Ok(inner) => Link.bracket_walk(b, i + 1, List.drop_last(open, 1), gt_end, Dict.insert(known, inner, Ok(i)))
+                    Err(_) => { close: Ok(i), known }
                 }
             } else {
-                Link.match_bracket(b, i + 1, depth)
+                Link.bracket_walk(b, i + 1, open, gt_end, known)
             }
         }
+
+    ## The walk ran out: neither it nor any bracket still open closes.
+    unclosed : List(U64), Link.Known -> { close : Try(U64, [NotFound]), known : Link.Known }
+    unclosed = |open, known| {
+        close: Err(NotFound),
+        known: List.fold(open, known, |k, o| Dict.insert(k, o, Err(NotFound))),
+    }
+
+    ## Where a tag or autolink opened by the `<` at `i` ends, for bracket
+    ## matching, which treats one as opaque (`match_bracket`). Its end is
+    ## the FIRST `>`, quotes or not; `gt_end` is one past the last `>` in `b`.
+    ##
+    ## Before slicing out and checking what lies between, the walk gives up
+    ## at a `<` outside quotes, for the reason `Tag.find_tag_end` gives — and it
+    ## is the same set of answers: a quote this pairs holds no `>`, since a
+    ## `>` in it would have been the first one. Without it, each `<` of
+    ## `[` + `"<a" * 20_000` + `>]` sliced and checked up to the `>` at the end.
+    opaque_end : List(U8), U64, U64 -> Try(U64, [NotFound])
+    opaque_end = |b, i, gt_end|
+        if i + 1 >= gt_end {
+            Err(NotFound)
+        } else {
+            c = Bytes.at(b, i + 1)
+            found = if c == 33 or c == 63 {
+                Bytes.find_byte(b, i + 1, 62)
+            } else {
+                Link.first_gt(b, i + 1)
+            }
+            match found {
+                Ok(gt) =>
+                    if Link.is_opaque(Bytes.slice(b, i + 1, gt)) {
+                        Ok(gt)
+                    } else {
+                        Err(NotFound)
+                    }
+                Err(_) => Err(NotFound)
+            }
+        }
+
+    ## The first `>` at or after `i`, or `NotFound` at a `<` outside quotes.
+    first_gt : List(U8), U64 -> Try(U64, [NotFound])
+    first_gt = |b, i|
+        if i >= List.len(b) {
+            Err(NotFound)
+        } else {
+            c = Bytes.at(b, i)
+            if c == 62 {
+                Ok(i)
+            } else if c == 60 {
+                Err(NotFound)
+            } else if c == 34 or c == 39 {
+                Link.quote_or_gt(b, i + 1, c)
+            } else {
+                Link.first_gt(b, i + 1)
+            }
+        }
+
+    ## Inside a quote opened by `q`: the `>` that is first, or on past the
+    ## closing quote.
+    quote_or_gt : List(U8), U64, U8 -> Try(U64, [NotFound])
+    quote_or_gt = |b, i, q|
+        if i >= List.len(b) {
+            Err(NotFound)
+        } else {
+            c = Bytes.at(b, i)
+            if c == 62 {
+                Ok(i)
+            } else if c == q {
+                Link.first_gt(b, i + 1)
+            } else {
+                Link.quote_or_gt(b, i + 1, q)
+            }
+        }
+
+    ## A raw tag or an autolink is opaque to bracket matching, so
+    ## `[foo <bar attr="](baz)">` does not close at the `]` sitting inside an
+    ## attribute value.
+    is_opaque : Str -> Bool
+    is_opaque = |inner| Tag.is_tag(inner) or Autolink.is_autolink(inner)
 
     match_paren : List(U8), U64, U64 -> Try(U64, [NotFound])
     match_paren = |b, i, depth|
