@@ -85,8 +85,11 @@ Inl := { loc : Loc.T, node : Inl.Node }.{
     }
 
     ## Shift a subtree's locations by `base`, clamping to `cap`. Both offsets are
-    ## in the SAME payload — `Scan` uses it to lift a reference label's inlines
-    ## into the enclosing scan — so no line table is involved and none is needed.
+    ## in the SAME payload, so no line table is involved and none is needed.
+    ##
+    ## Nothing in the package calls it now: `Scan` used it to lift a link
+    ## label's inlines into the enclosing scan, and a label is scanned in place
+    ## since, on its paragraph's own offsets. It stays because `Inl` is exposed.
     shift_all : List(Inl), U64, U64 -> List(Inl)
     shift_all = |ks, base, cap| List.map(ks, |k| Inl.shift(k, base, cap))
 
