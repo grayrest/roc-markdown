@@ -17,7 +17,8 @@
 import Doc exposing [Doc]
 import Loc exposing [Loc]
 import Lex
-import Scan
+import Bytes
+import Link
 import Ents
 import Defs
 
@@ -308,12 +309,12 @@ Stack := [].{
             Stack.push(Stack.mark_content(st), Indented, [Loc.seg_of(lo, Lex.unindent(rest, 4))], lo)
         } else if ind < 4 and Lex.opens_fence(t) {
             b = Str.to_utf8(t)
-            ch = Scan.at(b, 0)
+            ch = Bytes.at(b, 0)
             n = Lex.leading_run(b, ch, 0)
             info = Str.from_utf8_lossy(List.drop_first(b, n)).trim()
             Stack.push(
                 Stack.mark_content(Stack.close_leaf(st)),
-                Fence({ ch: ch, len: n, indent: ind, lang: Scan.unescape(Ents.decode(Lex.first_word(info))) }),
+                Fence({ ch: ch, len: n, indent: ind, lang: Link.unescape(Ents.decode(Lex.first_word(info))) }),
                 [],
                 lo,
             )

@@ -13,7 +13,7 @@
 ## Nominals stay here anyway, for the ordinary reason: `Span` has methods.
 ##
 ## `link` is `""` when the span is not a link — a sentinel rather than a tag,
-## and it is NOT airtight. `Scan.safe_href` is a DENYLIST — `javascript:`,
+## and it is NOT airtight. `Link.safe_href` is a DENYLIST — `javascript:`,
 ## `vbscript:`, `data:`, `file:` — so an empty destination passes it, and
 ## `[x]()` parses to a `Link` whose href is `""`. Flattened, that is a span this
 ## type cannot distinguish from ordinary text, while `Html.render` lowers the

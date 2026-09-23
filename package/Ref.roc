@@ -5,7 +5,7 @@
 ## modules.
 ## 
 ## **Alias-only, importing nothing, so it can be a leaf of the import graph.**
-## The parsing lives in `Defs.roc`, which needs `Scan`; `Scan` needs this type.
+## The parsing lives in `Defs.roc`, which needs `Link`; `Link` needs this type.
 ## Keeping the two apart is what stops that being a cycle.
 Ref := [].{
     Def : { label : Str, dest : Str, title : Str }

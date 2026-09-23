@@ -56,7 +56,7 @@ the scope of a parser.
 `<!-- raw HTML omitted -->` rather than passing through; `to_html_unsafe` is the
 opt-in.
 
-Aside from inline HTML, hrefs are filtered by `Scan.safe_href`, which refuses
+Aside from inline HTML, hrefs are filtered by `Link.safe_href`, which refuses
 `javascript:`, `vbscript:`, `data:` and `file:` and allows everything else.
 
 ## Build size: The entity table is the one large constant
@@ -116,7 +116,12 @@ package/
   Markdown.roc  the front door
   Stack.roc     phase 1 — block structure, a line at a time against a stack
   Lower.roc     phase 2 — lift the link definitions, then parse the inlines
-  Scan.roc      the inline scanner: one left-to-right pass, then emphasis
+  Scan.roc      the inline scanner: one left-to-right pass over the bytes
+  Emph.roc      delimiter flanking, and the pass that pairs emphasis
+  Link.roc      link and image parts: brackets, destinations, labels, hrefs
+  Autolink.roc  `<scheme:…>`, bare URLs and email addresses
+  Tag.roc       raw inline HTML tags
+  Bytes.roc     bounds-safe byte reads and searches
   Lex.roc       block-level lexical predicates
   Table.roc     the table sub-parser
   Defs.roc      link reference definitions

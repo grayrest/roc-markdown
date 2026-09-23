@@ -3,7 +3,8 @@
 ## Every function here answers a question about one line — or a few bytes of one
 ## — with no reference to what is open, what came before, or what the document
 ## is. That is the entire membership rule: nothing here touches parser state.
-import Scan
+import Bytes
+import Tag
 
 Lex := [].{
     ## `drop_prefix`, not `drop_first_bytes`: the latter is the CHECKED form and
@@ -132,7 +133,7 @@ Lex := [].{
 
     digit_run : List(U8), U64 -> U64
     digit_run = |b, i| {
-        c = Scan.at(b, i)
+        c = Bytes.at(b, i)
         if c >= 48 and c <= 57 {
             Lex.digit_run(b, i + 1)
         } else {
@@ -146,7 +147,7 @@ Lex := [].{
     opens_fence : Str -> Bool
     opens_fence = |t| {
         b = Str.to_utf8(t)
-        ch = Scan.at(b, 0)
+        ch = Bytes.at(b, 0)
         if ch != 96 and ch != 126 {
             False
         } else {
@@ -185,7 +186,7 @@ Lex := [].{
     ## free, so the guard costs a load and three comparisons.
     marker : Str -> [Bullet(U64, Str), Numbered(U64, U64, Str), NotList]
     marker = |raw| {
-        c0 = Scan.at(Str.to_utf8(raw.trim()), 0)
+        c0 = Bytes.at(Str.to_utf8(raw.trim()), 0)
         if c0 == 45 or c0 == 42 or c0 == 43 or (c0 >= 48 and c0 <= 57) {
             Lex.marker_at(raw)
         } else {
@@ -280,11 +281,11 @@ Lex := [].{
     marker_char : Str -> Str
     marker_char = |t| {
         b = Str.to_utf8(t)
-        c0 = Scan.at(b, 0)
+        c0 = Bytes.at(b, 0)
         if c0 == 45 or c0 == 42 or c0 == 43 {
             Str.from_utf8_lossy([c0])
         } else {
-            Str.from_utf8_lossy([Scan.at(b, Lex.digit_run(b, 0))])
+            Str.from_utf8_lossy([Bytes.at(b, Lex.digit_run(b, 0))])
         }
     }
 
@@ -385,7 +386,7 @@ Lex := [].{
         } else if List.contains(Lex.block_tags, name) {
             True
         } else {
-            after = Scan.at(
+            after = Bytes.at(
                 Str.to_utf8(t),
                 Str.count_utf8_bytes(name) + (if t.starts_with("</") { 2 } else { 1 }),
             )
@@ -393,9 +394,9 @@ Lex := [].{
             ## same test the inline scanner applies, so `<a h*#ref="hi">` is
             ## text in both places rather than a block in one.
             t.ends_with(">")
-            and (after == 62 or after == 47 or Scan.is_space(after))
+            and (after == 62 or after == 47 or Bytes.is_space(after))
             and Lex.tag_is_whole_line(t)
-            and Scan.is_tag(Str.drop_suffix(t.drop_prefix("<"), ">"))
+            and Tag.is_tag(Str.drop_suffix(t.drop_prefix("<"), ">"))
         }
     }
 
@@ -427,8 +428,8 @@ Lex := [].{
 
     take_alpha : List(U8), U64 -> Str
     take_alpha = |b, i| {
-        c = Scan.at(b, i)
-        if Scan.is_alpha(c) or (i > 0 and c >= 48 and c <= 57) {
+        c = Bytes.at(b, i)
+        if Bytes.is_alpha(c) or (i > 0 and c >= 48 and c <= 57) {
             Lex.take_alpha(b, i + 1)
         } else {
             Str.from_utf8_lossy(List.sublist(b, { start: 0, len: i }))
