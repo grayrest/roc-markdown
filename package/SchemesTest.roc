@@ -35,6 +35,9 @@ SchemesTest := [].{
 
     text : Str -> Str
     text = |t| "<p>${t}</p>\n"
+
+    img : Str -> Str
+    img = |src| "<p><img src=\"${src}\" alt=\"a\" /></p>\n"
 }
 
 ## --- the default is the denylist ---------------------------------------------
@@ -106,3 +109,27 @@ expect SchemesTest.web_html("see www.x.com now") == "<p>see <a href=\"http://www
 expect SchemesTest.html_only(["https"], "see www.x.com now") == SchemesTest.text("see www.x.com now")
 ## should_leave_a_bare_email_as_text_when_mailto_is_unlisted
 expect SchemesTest.html_only(["https"], "mail a@b.co now") == SchemesTest.text("mail a@b.co now")
+
+## --- images: filtered only under Only ----------------------------------------
+##
+## `parse` leaves an image's `src` alone: a browser does not execute
+## `javascript:` from `<img src>`, and trusted documents embed `data:` images.
+
+## should_keep_a_data_image_by_default
+expect SchemesTest.html("![a](data:image/png;base64,AA)") == SchemesTest.img("data:image/png;base64,AA")
+## should_keep_a_denied_scheme_image_by_default
+expect SchemesTest.html("![a](javascript:x)") == SchemesTest.img("javascript:x")
+## should_keep_an_image_with_a_listed_scheme
+expect SchemesTest.web_html("![a](https://x/i.png)") == SchemesTest.img("https://x/i.png")
+## should_match_an_image_scheme_ignoring_case
+expect SchemesTest.web_html("![a](HTTPS://x/i.png)") == SchemesTest.img("HTTPS://x/i.png")
+## should_keep_a_scheme_less_image
+expect SchemesTest.web_html("![a](/i.png)") == SchemesTest.img("/i.png")
+## should_leave_an_unlisted_data_image_as_its_alt_text
+expect SchemesTest.web_html("![a](data:image/png;base64,AA)") == SchemesTest.text("a")
+## should_leave_an_unlisted_scheme_image_as_its_alt_text
+expect SchemesTest.web_html("![a](irc:x)") == SchemesTest.text("a")
+## should_refuse_a_javascript_image_even_when_listed
+expect SchemesTest.html_only(["javascript"], "![a](javascript:x)") == SchemesTest.text("a")
+## should_refuse_an_unlisted_scheme_in_an_image_reference
+expect SchemesTest.web_html("![a][r]\n\n[r]: irc:x") == SchemesTest.text("a")

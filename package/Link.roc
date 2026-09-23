@@ -468,14 +468,24 @@ Link := [].{
 
     link_node : U64, U64, List(Inl), { dest : Str, title : Str, ok : Bool }, Bool, Link.Schemes -> List(Emph.Tk)
     link_node = |start, end, label, parts, image, schemes|
-        if image {
-            [Node(Inl.at(start, end, Image({ src: parts.dest, title: parts.title, kids: label })))]
-        } else if Link.allows(schemes, parts.dest) {
-            [Node(Inl.at(start, end, Link({ href: parts.dest, title: parts.title, kids: label })))]
-        } else {
+        if !Link.admits(schemes, parts.dest, image) {
             ## The label survives as ordinary content — spliced, not wrapped, so
-            ## a rejected href leaves no trace in the tree.
+            ## a rejected href leaves no trace in the tree. An image's label is
+            ## its alt text, so a refused image becomes that.
             List.map(label, |n| Node(n))
+        } else if image {
+            [Node(Inl.at(start, end, Image({ src: parts.dest, title: parts.title, kids: label })))]
+        } else {
+            [Node(Inl.at(start, end, Link({ href: parts.dest, title: parts.title, kids: label })))]
+        }
+
+    ## `allows`, except that `Any` leaves an image's source alone (see
+    ## `Schemes`).
+    admits : Link.Schemes, Str, Bool -> Bool
+    admits = |schemes, dest, image|
+        match schemes {
+            Any => image or Link.allows(schemes, dest)
+            Only(_) => Link.allows(schemes, dest)
         }
 
     ## Which hrefs a parse lets become links (`Markdown.parse_with`).
@@ -485,10 +495,16 @@ Link := [].{
     ## `rel/x`, `?q` — always passes, and one with a scheme passes only when
     ## that scheme is in `list`, compared ignoring ASCII case. Listing
     ## `javascript` does not let it through; the denylist is not optional.
+    ##
+    ## An image's source is filtered only under `Only`, by the same rule. Under
+    ## `Any` it is not filtered at all, which is deliberate: a browser does not
+    ## execute `javascript:` from `<img src>`, and trusted documents embed
+    ## `data:` images, which the denylist would break.
     Schemes : [Any, Only(List(Str))]
 
     ## Does `schemes` let `href` become a link? A refused href becomes text,
-    ## at every site that asks: inline and reference links, and every autolink.
+    ## at every site that asks: inline and reference links, every autolink,
+    ## and (under `Only`) images.
     allows : Link.Schemes, Str -> Bool
     allows = |schemes, href|
         match schemes {

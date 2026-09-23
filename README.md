@@ -69,8 +69,12 @@ which keeps the denylist and adds an allowlist: an href with a scheme links only
 when the scheme is listed (compared ignoring ASCII case), and one with no scheme
 (`/path`, `#frag`, `rel/x`, `?q`) always links. The scheme is everything before
 a `:` that comes before any `/`, `?` or `#`, so `localhost:5001/x` has the
-scheme `localhost`. Listing `javascript` does not allow it. Image `src`s are
-not filtered.
+scheme `localhost`. Listing `javascript` does not allow it.
+
+Image sources are filtered only under `Only`, by the same rule; a refused image
+becomes its alt text. Under `parse` they are not filtered, on purpose: a browser
+does not execute `javascript:` from `<img src>`, and documents you wrote may
+embed `data:` images, which the denylist would break.
 
 ## Build size: The entity table is the one large constant
 

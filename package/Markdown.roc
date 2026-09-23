@@ -24,8 +24,8 @@ Markdown := [].{
     ## edit, and why it is not a parameter.
     ##
     ## Links are filtered by a denylist: `javascript:`, `vbscript:`, `data:`
-    ## and `file:` hrefs become plain text and every other scheme links. This
-    ## is `parse_with({ schemes: Any }, source)`.
+    ## and `file:` hrefs become plain text and every other scheme links. Image
+    ## sources are not filtered. This is `parse_with({ schemes: Any }, source)`.
     parse : Str -> List(Block)
     parse = |source| Markdown.parse_with({ schemes: Any }, source)
 
@@ -37,6 +37,11 @@ Markdown := [].{
     ## ignoring ASCII case; one with no scheme (`/path`, `#frag`, `rel/x`,
     ## `?q`) always links. A refused href becomes plain text. Listing
     ## `javascript` does not allow it.
+    ##
+    ## Under `Only`, an image's source passes the same rule or the image
+    ## becomes its alt text. Under `Any` images are not filtered: a browser
+    ## does not execute `javascript:` from `<img src>`, and trusted documents
+    ## embed `data:` images.
     ##
     ## The scheme is everything before a `:` that comes before any `/`, `?` or
     ## `#` — so `localhost:5001/x` has the scheme `localhost`. Untrusted
