@@ -469,7 +469,7 @@ Stack := [].{
         ## Leading definitions are not heading content. They stay behind as a
         ## paragraph of their own so phase 2 still collects them — dropping them
         ## here would lose the definition along with the text.
-        n = Defs.lead_lines(List.map(top.text, |g| g.text), 0)
+        n = Defs.lead_lines(List.map(top.text, |g| g.text))
         lead = List.sublist(top.text, { start: 0, len: n })
         kept = List.drop_first(top.text, n)
         base = Stack.pop_discard(st)

@@ -14,14 +14,11 @@ import Ents
 
 Defs := [].{
     ## How many lines, from the front, are link reference definitions.
-    lead_lines : List(Str), U64 -> U64
-    lead_lines = |lines, n|
-        match Defs.def_at(lines) {
-            Ok(d) => Defs.lead_lines(List.drop_first(lines, d.used), n + d.used)
-            Err(_) => n
-        }
+    lead_lines : List(Str) -> U64
+    lead_lines = |lines| Defs.leading(lines).used
 
-    ## A definition starting at the head of `lines`, and how many lines it ate.
+    ## The definitions at the head of `lines`, in order, and how many lines
+    ## they ate.
     ##
     ## Works on the RUN joined with newlines rather than line by line, because
     ## every part of a definition may span lines: the label (`[Foo\n  bar]:`),
@@ -29,16 +26,34 @@ Defs := [].{
     ## shapes and no others.
     ##
     ## The run stops at the first blank line — a definition cannot contain one —
-    ## which is what keeps this from scanning the whole document per candidate.
-    def_at : List(Str) -> Try({ def : Ref.Def, used : U64 }, [NotDef])
-    def_at = |lines| {
-        run = Defs.until_blank(lines, [])
-        joined = Str.join_with(run, "\n")
-        b = Str.to_utf8(joined)
-        if !joined.trim().starts_with("[") {
+    ## and is joined ONCE, with a cursor walking it. Joining what was left for
+    ## every definition made a footer of 20,000 consecutive `[n]: url` lines
+    ## quadratic.
+    leading : List(Str) -> { defs : List(Ref.Def), used : U64 }
+    leading = |lines| {
+        b = Str.to_utf8(Str.join_with(Defs.until_blank(lines, []), "\n"))
+        Defs.leading_from(b, 0, { defs: [], used: 0 })
+    }
+
+    leading_from : List(U8), U64, { defs : List(Ref.Def), used : U64 } -> { defs : List(Ref.Def), used : U64 }
+    leading_from = |b, pos, acc|
+        match Defs.def_at(b, pos) {
+            Ok(d) => Defs.leading_from(b, d.next, { defs: List.append(acc.defs, d.def), used: acc.used + d.used })
+            Err(_) => acc
+        }
+
+    ## A definition starting at `pos`, the head of a line of the run `b`: what
+    ## it defines, how many lines it ate, and where the line after it starts.
+    ##
+    ## Everything past `pos` is read in place; the run's end is the end of `b`,
+    ## as it was when this read a freshly joined remainder.
+    def_at : List(U8), U64 -> Try({ def : Ref.Def, used : U64, next : U64 }, [NotDef])
+    def_at = |b, pos| {
+        line = Defs.line_at(b, pos)
+        if !line.trim().starts_with("[") {
             Err(NotDef)
         } else {
-            start = Lex.indent(joined, 0)
+            start = pos + Lex.indent(line, 0)
             match Defs.find_label_end(b, start + 1) {
                 Ok(close) => {
                     label = Bytes.slice(b, start + 1, close)
@@ -85,7 +100,8 @@ Defs := [].{
                                         ""
                                     },
                                 },
-                                used: Defs.line_of(b, stop) + 1,
+                                used: Defs.newlines(b, pos, stop) + 1,
+                                next: Defs.line_after(b, stop),
                             })
                         }
                     }
@@ -94,6 +110,23 @@ Defs := [].{
             }
         }
     }
+
+    ## The line of `b` starting at `pos`, without its newline.
+    line_at : List(U8), U64 -> Str
+    line_at = |b, pos| Bytes.slice(b, pos, Defs.line_end(b, pos))
+
+    ## The newline ending the line that holds `i`, or the end of `b`.
+    line_end : List(U8), U64 -> U64
+    line_end = |b, i|
+        if i >= List.len(b) or Bytes.at(b, i) == 10 {
+            i
+        } else {
+            Defs.line_end(b, i + 1)
+        }
+
+    ## Where the line after the one holding `i` starts.
+    line_after : List(U8), U64 -> U64
+    line_after = |b, i| Defs.line_end(b, i) + 1
 
     ## The lines up to (not including) the first blank one.
     until_blank : List(Str), List(Str) -> List(Str)
@@ -171,9 +204,10 @@ Defs := [].{
             i
         }
 
-    ## How many newlines precede `i` — the count of lines the definition ate.
-    line_of : List(U8), U64 -> U64
-    line_of = |b, i| List.len(List.keep_if(List.sublist(b, { start: 0, len: i }), |c| c == 10))
+    ## How many newlines lie in `[from, to)` — with `from` the head of a
+    ## definition, one fewer than the lines it ate.
+    newlines : List(U8), U64, U64 -> U64
+    newlines = |b, from, to| List.count_if(List.sublist(b, { start: from, len: to - from }), |c| c == 10)
 
     opens_title : U8 -> Bool
     opens_title = |c| c == 34 or c == 39 or c == 40

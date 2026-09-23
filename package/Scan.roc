@@ -39,7 +39,7 @@ Scan := [].{
     ##    learned DURING the scan rather than before it.
     Ctx : {
         b : List(U8),
-        defs : List(Ref.Def),
+        defs : Ref.Index,
         end : U64,
         gt_end : U64,
         rb_end : U64,
@@ -47,7 +47,7 @@ Scan := [].{
         email_dead : U64,
     }
 
-    context : List(U8), List(Ref.Def) -> Scan.Ctx
+    context : List(U8), Ref.Index -> Scan.Ctx
     context = |b, defs| {
         b,
         defs,
@@ -115,7 +115,7 @@ Scan := [].{
     push_all : Scan.Buf, List(U8) -> Scan.Buf
     push_all = |buf, xs| { ..buf, bytes: List.concat(buf.bytes, xs) }
 
-    run : Str, List(Ref.Def) -> List(Inl)
+    run : Str, Ref.Index -> List(Inl)
     run = |s, defs| Emph.emphasis(Scan.tokens(Scan.context(Str.to_utf8(s), defs), 0, Scan.buf0(0), []))
 
     ## --- stage 1: tokens -----------------------------------------------------

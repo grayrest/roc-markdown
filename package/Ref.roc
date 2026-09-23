@@ -9,4 +9,10 @@
 ## Keeping the two apart is what stops that being a cycle.
 Ref := [].{
     Def : { label : Str, dest : Str, title : Str }
+
+    ## The definitions by folded label, for the inline scanner to look up:
+    ## every reference and every shortcut `[x]` asks, so a list searched in
+    ## order made a note of many of each quadratic. Built once per document
+    ## (`Link.index`).
+    Index : Dict(Str, Ref.Def)
 }

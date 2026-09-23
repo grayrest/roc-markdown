@@ -24,7 +24,7 @@ Table := [].{
     ##
     ## A LIST of blocks, because a run can end as a table followed by prose:
     ## the rows past the padding budget (`within_budget`) are a paragraph.
-    parse : List(Loc.Seg), List(Ref.Def), Loc.T -> List(Block)
+    parse : List(Loc.Seg), Ref.Index, Loc.T -> List(Block)
     parse = |lines, defs, loc| {
         all = List.map(lines, |l| { src: l, cells: Table.cells_of(l) })
         if !Table.well_formed(all) {
@@ -60,7 +60,7 @@ Table := [].{
     }
 
     ## Lines that are not a table, as the paragraph they read as.
-    prose : List(Loc.Seg), List(Ref.Def), Loc.T -> Block
+    prose : List(Loc.Seg), Ref.Index, Loc.T -> Block
     prose = |lines, defs, loc| Block.mk(loc, Para(Inl.project_all(Scan.run(Loc.joined(lines), defs), lines)))
 
     ## How many padded cells one table may hold.
@@ -253,7 +253,7 @@ Table := [].{
     ## A padded cell has no source, so it collapses to a zero-width location at
     ## the end of the row that was short — the same treatment `Loc.none` gives
     ## any node the parser synthesized (D11b).
-    fit : Table.Row, U64, List(Ref.Def) -> List(Block.Cell)
+    fit : Table.Row, U64, Ref.Index -> List(Block.Cell)
     fit = |row, n, defs| {
         pad = { off: row.src.off + Str.count_utf8_bytes(row.src.text), text: "" }
         List.map(

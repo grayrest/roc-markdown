@@ -230,12 +230,27 @@ Link := [].{
             }
         }
 
-    lookup : List(Ref.Def), Str -> Try(Ref.Def, [NotFound])
+    lookup : Ref.Index, Str -> Try(Ref.Def, [NotFound])
     lookup = |defs, key|
-        match List.find_first(defs, |d| d.label == key) {
+        match Dict.get(defs, key) {
             Ok(d) => Ok(d)
             Err(_) => Err(NotFound)
         }
+
+    ## The definitions in document order, by label. The FIRST definition of a
+    ## label is the one that counts, so a later one never replaces it.
+    index : List(Ref.Def) -> Ref.Index
+    index = |defs|
+        List.fold(
+            defs,
+            Dict.empty(),
+            |ix, d|
+                if Dict.contains(ix, d.label) {
+                    ix
+                } else {
+                    Dict.insert(ix, d.label, d)
+                },
+        )
 
     ## Labels match case-insensitively with runs of whitespace collapsed, so
     ## `[Foo  Bar]` and `[foo bar]` are one label.

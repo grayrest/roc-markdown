@@ -12,6 +12,7 @@ import Block exposing [Block]
 import Inl exposing [Inl]
 import Ref
 import Defs
+import Link
 import Scan
 import Table
 
@@ -19,7 +20,7 @@ Lower := [].{
     run : List(Doc) -> List(Block)
     run = |docs| {
         c = Lower.collect(docs, [], [])
-        Lower.lower_all(c.docs, c.defs)
+        Lower.lower_all(c.docs, Link.index(c.defs))
     }
 
     ## ## Walk one: lift the definitions out
@@ -79,12 +80,10 @@ Lower := [].{
     ## always had, so a definition above a reference costs the text below it
     ## nothing.
     strip_defs : List(Loc.Seg), List(Ref.Def) -> { segs : List(Loc.Seg), defs : List(Ref.Def) }
-    strip_defs = |segs, defs|
-        match Defs.def_at(List.map(segs, |g| g.text)) {
-            Ok(d) =>
-                Lower.strip_defs(List.drop_first(segs, d.used), List.append(defs, d.def))
-            Err(_) => { segs: segs, defs: defs }
-        }
+    strip_defs = |segs, defs| {
+        lead = Defs.leading(List.map(segs, |g| g.text))
+        { segs: List.drop_first(segs, lead.used), defs: List.concat(defs, lead.defs) }
+    }
 
     ## The paragraph's source span, once its leading definitions are gone.
     ##
@@ -104,7 +103,7 @@ Lower := [].{
     ## One `Doc` is usually one `Block`. A table run can be two: the table, and
     ## the rows past its padding budget as prose (`Table.parse`).
 
-    block : Doc, List(Ref.Def) -> List(Block)
+    block : Doc, Ref.Index -> List(Block)
     block = |d, defs| {
         loc = Loc.at(d.at.start, d.at.end)
         match d.node {
@@ -126,17 +125,17 @@ Lower := [].{
         }
     }
 
-    lower_all : List(Doc), List(Ref.Def) -> List(Block)
+    lower_all : List(Doc), Ref.Index -> List(Block)
     lower_all = |ds, defs| List.join(List.map(ds, |d| Lower.block(d, defs)))
 
     ## Scan a leaf's payload, then map the scanner's offsets back onto the
     ## source through the leaf's line table. The two steps are separate because
     ## `Scan` has no business knowing what phase 1 stripped — it reads a string
     ## and reports offsets into it, and the table is what those offsets mean.
-    inlines : List(Loc.Seg), List(Ref.Def) -> List(Inl)
+    inlines : List(Loc.Seg), Ref.Index -> List(Inl)
     inlines = |segs, defs| Inl.project_all(Scan.run(Loc.joined(segs), defs), segs)
 
-    entry : Doc.Entry, List(Ref.Def) -> List(Block)
+    entry : Doc.Entry, Ref.Index -> List(Block)
     entry = |e, defs|
         Lower.with_task(Lower.lower_all(e.blocks, defs), e.task, e.start)
 

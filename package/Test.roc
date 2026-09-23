@@ -178,7 +178,7 @@ expect Test.tree("a *b* c") == "a E[b] c"
 ## through `to_html`, so it is asserted on both sides of the package.
 ## The label comes back as TEXT. A count alone cannot say so: an accepted
 ## link is one node too.
-expect Test.nodes(Scan.run("[x](javascript:void)", [])) == "x"
+expect Test.nodes(Scan.run("[x](javascript:void)", Dict.empty())) == "x"
 expect Test.html("[x](javascript:void)") == "<p>x</p>\n"
 expect Test.html("[x](data:text/html,y)") == "<p>x</p>\n"
 expect Test.html("[x](vbscript:y)") == "<p>x</p>\n"
@@ -372,3 +372,17 @@ expect
 expect
     Test.html("https://a${Str.repeat(")", 20000)}")
     == "<p><a href=\"https://a\">https://a</a>${Str.repeat(")", 20000)}</p>\n"
+
+## --- many reference definitions ------------------------------------------------
+##
+## A footer of consecutive `[n]: url` lines re-joined the rest of its run for
+## every definition it stripped, and every `[n]` then searched the definitions
+## in order: ten thousand of each took minutes.
+## should_resolve_ten_thousand_definitions_in_one_run
+expect {
+    labels = List.map_with_index(List.repeat(0, 10000), |_, i| i.to_str())
+    defs = Str.join_with(List.map(labels, |k| "[${k}]: /${k}"), "\n")
+    refs = Str.join_with(List.map(labels, |k| "[${k}]"), " ")
+    links = Str.join_with(List.map(labels, |k| "<a href=\"/${k}\">${k}</a>"), " ")
+    Test.html("${defs}\n\n${refs}") == "<p>${links}</p>\n"
+}
