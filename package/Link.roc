@@ -466,17 +466,89 @@ Link := [].{
                 },
         )
 
-    link_node : U64, U64, List(Inl), { dest : Str, title : Str, ok : Bool }, Bool -> List(Emph.Tk)
-    link_node = |start, end, label, parts, image|
+    link_node : U64, U64, List(Inl), { dest : Str, title : Str, ok : Bool }, Bool, Link.Schemes -> List(Emph.Tk)
+    link_node = |start, end, label, parts, image, schemes|
         if image {
             [Node(Inl.at(start, end, Image({ src: parts.dest, title: parts.title, kids: label })))]
-        } else if Link.safe_href(parts.dest) {
+        } else if Link.allows(schemes, parts.dest) {
             [Node(Inl.at(start, end, Link({ href: parts.dest, title: parts.title, kids: label })))]
         } else {
             ## The label survives as ordinary content — spliced, not wrapped, so
             ## a rejected href leaves no trace in the tree.
             List.map(label, |n| Node(n))
         }
+
+    ## Which hrefs a parse lets become links (`Markdown.parse_with`).
+    ##
+    ## `Any` is the denylist alone (`safe_href`). `Only(list)` is the denylist
+    ## AND an allowlist of schemes: an href with no scheme — `/path`, `#frag`,
+    ## `rel/x`, `?q` — always passes, and one with a scheme passes only when
+    ## that scheme is in `list`, compared ignoring ASCII case. Listing
+    ## `javascript` does not let it through; the denylist is not optional.
+    Schemes : [Any, Only(List(Str))]
+
+    ## Does `schemes` let `href` become a link? A refused href becomes text,
+    ## at every site that asks: inline and reference links, and every autolink.
+    allows : Link.Schemes, Str -> Bool
+    allows = |schemes, href|
+        match schemes {
+            Any => Link.safe_href(href)
+            Only(list) => Link.safe_href(href) and Link.scheme_listed(list, href)
+        }
+
+    scheme_listed : List(Str), Str -> Bool
+    scheme_listed = |list, href|
+        match Link.scheme_of(href.trim()) {
+            Ok(scheme) => {
+                low = Str.with_ascii_lowercased(scheme)
+                List.any(list, |s| Str.with_ascii_lowercased(s) == low)
+            }
+            Err(NoScheme) => True
+        }
+
+    ## The scheme of `href`: everything before a `:` that comes before any
+    ## `/`, `?` or `#`. With none of those first, it is a relative reference
+    ## and has no scheme.
+    ##
+    ## RFC 3986 spells a scheme `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`,
+    ## and that grammar is deliberately NOT checked. A prefix that breaks it
+    ## cannot equal a listed scheme, so it is refused, where checking would
+    ## call it scheme-less and let it pass. That is the safe side: a consumer
+    ## that strips tabs and control bytes from a URL, as a browser's URL
+    ## parser does, reads `java\tscript:` (an entity-decoded tab) and
+    ## `\u(1)javascript:` as the scheme they spell. `localhost:5001/foo` has
+    ## the scheme `localhost`, as the RFC and a browser both read it.
+    scheme_of : Str -> Try(Str, [NoScheme])
+    scheme_of = |href| {
+        b = Str.to_utf8(href)
+        Link.colon_at(b, 0).map_ok(|i| Bytes.slice(b, 0, i))
+    }
+
+    colon_at : List(U8), U64 -> Try(U64, [NoScheme])
+    colon_at = |b, i|
+        match List.get(b, i) {
+            Err(_) => Err(NoScheme)
+            Ok(c) =>
+                if c == Link.colon {
+                    Ok(i)
+                } else if c == Link.slash or c == Link.question or c == Link.hash {
+                    Err(NoScheme)
+                } else {
+                    Link.colon_at(b, i + 1)
+                }
+        }
+
+    colon : U8
+    colon = 58
+
+    slash : U8
+    slash = 47
+
+    question : U8
+    question = 63
+
+    hash : U8
+    hash = 35
 
     ## The dangerous schemes, refused; everything else allowed.
     ##

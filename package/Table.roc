@@ -8,6 +8,7 @@ import Loc exposing [Loc]
 import Block exposing [Block]
 import Inl exposing [Inl]
 import Scan
+import Link
 
 Table := [].{
     ## One source line, split into cells that each remember where they came
@@ -24,15 +25,15 @@ Table := [].{
     ##
     ## A LIST of blocks, because a run can end as a table followed by prose:
     ## the rows past the padding budget (`within_budget`) are a paragraph.
-    parse : List(Loc.Seg), Ref.Index, Loc.T -> List(Block)
-    parse = |lines, defs, loc| {
+    parse : List(Loc.Seg), Ref.Index, Link.Schemes, Loc.T -> List(Block)
+    parse = |lines, defs, schemes, loc| {
         all = List.map(lines, |l| { src: l, cells: Table.cells_of(l) })
         if !Table.well_formed(all) {
             ## Not a table at all: the delimiter row must be the SECOND line and
             ## carry exactly as many cells as the header. A run that fails that
             ## is prose that happens to contain pipes, and rendering it as a
             ## one-column table silently drops the rest of every row.
-            [Table.prose(lines, defs, loc)]
+            [Table.prose(lines, defs, schemes, loc)]
         } else
         match List.find_first(all, |r| !Table.is_delim(r.cells)) {
             Ok(header) => {
@@ -43,12 +44,12 @@ Table := [].{
                 }
                 kept = Table.within_budget(all, n, 0, 0)
                 rows = List.keep_if(List.take_first(all, kept), |r| !Table.is_delim(r.cells))
-                table = { ncols: n, align: align, cells: List.join(List.map(rows, |r| Table.fit(r, n, defs))) }
+                table = { ncols: n, align: align, cells: List.join(List.map(rows, |r| Table.fit(r, n, defs, schemes))) }
                 rest = List.drop_first(lines, kept)
                 match (List.get(lines, kept - 1), List.first(rest)) {
                     (Ok(last), Ok(first)) => [
                         Block.mk(Loc.at(loc.outer.start, last.off + Str.count_utf8_bytes(last.text)), Table(table)),
-                        Table.prose(rest, defs, Loc.at(first.off, loc.outer.end)),
+                        Table.prose(rest, defs, schemes, Loc.at(first.off, loc.outer.end)),
                     ]
                     _ => [Block.mk(loc, Table(table))]
                 }
@@ -60,8 +61,8 @@ Table := [].{
     }
 
     ## Lines that are not a table, as the paragraph they read as.
-    prose : List(Loc.Seg), Ref.Index, Loc.T -> Block
-    prose = |lines, defs, loc| Block.mk(loc, Para(Inl.project_all(Scan.run(Loc.joined(lines), defs), lines)))
+    prose : List(Loc.Seg), Ref.Index, Link.Schemes, Loc.T -> Block
+    prose = |lines, defs, schemes, loc| Block.mk(loc, Para(Inl.project_all(Scan.run(Loc.joined(lines), defs, schemes), lines)))
 
     ## How many padded cells one table may hold.
     ##
@@ -253,12 +254,12 @@ Table := [].{
     ## A padded cell has no source, so it collapses to a zero-width location at
     ## the end of the row that was short — the same treatment `Loc.none` gives
     ## any node the parser synthesized (D11b).
-    fit : Table.Row, U64, Ref.Index -> List(Block.Cell)
-    fit = |row, n, defs| {
+    fit : Table.Row, U64, Ref.Index, Link.Schemes -> List(Block.Cell)
+    fit = |row, n, defs, schemes| {
         pad = { off: row.src.off + Str.count_utf8_bytes(row.src.text), text: "" }
         List.map(
             List.take_first(List.concat(row.cells, List.repeat(pad, n)), n),
-            |c| Inl.project_all(Scan.run(c.text, defs), [c]),
+            |c| Inl.project_all(Scan.run(c.text, defs, schemes), [c]),
         )
     }
 }

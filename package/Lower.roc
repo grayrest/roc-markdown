@@ -17,10 +17,12 @@ import Scan
 import Table
 
 Lower := [].{
-    run : List(Doc) -> List(Block)
-    run = |docs| {
+    ## `schemes` is the href policy (`Link.Schemes`), carried beside the
+    ## definitions to every inline scan.
+    run : List(Doc), Link.Schemes -> List(Block)
+    run = |docs, schemes| {
         c = Lower.collect(docs, [], [])
-        Lower.lower_all(c.docs, Link.index(c.defs))
+        Lower.lower_all(c.docs, Link.index(c.defs), schemes)
     }
 
     ## ## Walk one: lift the definitions out
@@ -103,41 +105,41 @@ Lower := [].{
     ## One `Doc` is usually one `Block`. A table run can be two: the table, and
     ## the rows past its padding budget as prose (`Table.parse`).
 
-    block : Doc, Ref.Index -> List(Block)
-    block = |d, defs| {
+    block : Doc, Ref.Index, Link.Schemes -> List(Block)
+    block = |d, defs, schemes| {
         loc = Loc.at(d.at.start, d.at.end)
         match d.node {
-            Para(segs) => [Block.mk(loc, Para(Lower.inlines(segs, defs)))]
-            Heading(lvl, segs) => [Block.mk(loc, Heading(lvl, Lower.inlines(segs, defs)))]
+            Para(segs) => [Block.mk(loc, Para(Lower.inlines(segs, defs, schemes)))]
+            Heading(lvl, segs) => [Block.mk(loc, Heading(lvl, Lower.inlines(segs, defs, schemes)))]
             Code(c) => [Block.mk(loc, Code(c))]
-            Quote(ks) => [Block.mk(loc, Quote(Lower.lower_all(ks, defs)))]
+            Quote(ks) => [Block.mk(loc, Quote(Lower.lower_all(ks, defs, schemes)))]
             Items(i) => [
                 Block.mk(loc, Items({
                     ordered: i.ordered,
                     start: i.start,
                     tight: i.tight,
-                    entries: List.map(i.entries, |e| Lower.entry(e, defs)),
+                    entries: List.map(i.entries, |e| Lower.entry(e, defs, schemes)),
                 })),
             ]
-            Table(rows) => Table.parse(rows, defs, loc)
+            Table(rows) => Table.parse(rows, defs, schemes, loc)
             Html(h) => [Block.mk(loc, Html(h))]
             Rule => [Block.mk(loc, Rule)]
         }
     }
 
-    lower_all : List(Doc), Ref.Index -> List(Block)
-    lower_all = |ds, defs| List.join(List.map(ds, |d| Lower.block(d, defs)))
+    lower_all : List(Doc), Ref.Index, Link.Schemes -> List(Block)
+    lower_all = |ds, defs, schemes| List.join(List.map(ds, |d| Lower.block(d, defs, schemes)))
 
     ## Scan a leaf's payload, then map the scanner's offsets back onto the
     ## source through the leaf's line table. The two steps are separate because
     ## `Scan` has no business knowing what phase 1 stripped — it reads a string
     ## and reports offsets into it, and the table is what those offsets mean.
-    inlines : List(Loc.Seg), Ref.Index -> List(Inl)
-    inlines = |segs, defs| Inl.project_all(Scan.run(Loc.joined(segs), defs), segs)
+    inlines : List(Loc.Seg), Ref.Index, Link.Schemes -> List(Inl)
+    inlines = |segs, defs, schemes| Inl.project_all(Scan.run(Loc.joined(segs), defs, schemes), segs)
 
-    entry : Doc.Entry, Ref.Index -> List(Block)
-    entry = |e, defs|
-        Lower.with_task(Lower.lower_all(e.blocks, defs), e.task, e.start)
+    entry : Doc.Entry, Ref.Index, Link.Schemes -> List(Block)
+    entry = |e, defs, schemes|
+        Lower.with_task(Lower.lower_all(e.blocks, defs, schemes), e.task, e.start)
 
     ## Put the checkbox back where the marker was — at the head of the entry's
     ## first paragraph.

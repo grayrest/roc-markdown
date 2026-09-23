@@ -169,9 +169,10 @@ Autolink := [].{
     }
 
     ## An autolink is an ABSOLUTE URI — a scheme, then a colon — never a
-    ## relative one. `Link.safe_href` alone is not the test: it admits scheme-less
-    ## relatives so that `[x](train.jpg)` works, which made `<a>` an autolink to
-    ## a file called `a` instead of a raw HTML tag.
+    ## relative one. The href policy (`Link.allows`) alone is not the test: it
+    ## admits scheme-less relatives so that `[x](train.jpg)` works, which made
+    ## `<a>` an autolink to a file called `a` instead of a raw HTML tag. This
+    ## says what IS an autolink; the policy then says whether it may link.
     is_autolink : Str -> Bool
     is_autolink = |inner| {
         b = Str.to_utf8(inner)

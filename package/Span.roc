@@ -13,9 +13,11 @@
 ## Nominals stay here anyway, for the ordinary reason: `Span` has methods.
 ##
 ## `link` is `""` when the span is not a link — a sentinel rather than a tag,
-## and it is NOT airtight. `Link.safe_href` is a DENYLIST — `javascript:`,
-## `vbscript:`, `data:`, `file:` — so an empty destination passes it, and
-## `[x]()` parses to a `Link` whose href is `""`. Flattened, that is a span this
+## and it is NOT airtight. The href policy (`Link.allows`) refuses the
+## `javascript:`, `vbscript:`, `data:` and `file:` schemes, and under
+## `Markdown.parse_with`'s `Only` every scheme not listed as well, but an empty
+## destination has no scheme and passes both, so `[x]()` parses to a `Link`
+## whose href is `""`. Flattened, that is a span this
 ## type cannot distinguish from ordinary text, while `Html.render` lowers the
 ## same input to `<a href="">x</a>`. The two lowerings disagree exactly there.
 ##

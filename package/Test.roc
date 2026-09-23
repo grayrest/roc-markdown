@@ -178,7 +178,7 @@ expect Test.tree("a *b* c") == "a E[b] c"
 ## through `to_html`, so it is asserted on both sides of the package.
 ## The label comes back as TEXT. A count alone cannot say so: an accepted
 ## link is one node too.
-expect Test.nodes(Scan.run("[x](javascript:void)", Dict.empty())) == "x"
+expect Test.nodes(Scan.run("[x](javascript:void)", Dict.empty(), Any)) == "x"
 expect Test.html("[x](javascript:void)") == "<p>x</p>\n"
 expect Test.html("[x](data:text/html,y)") == "<p>x</p>\n"
 expect Test.html("[x](vbscript:y)") == "<p>x</p>\n"

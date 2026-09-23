@@ -24,6 +24,10 @@ Scan := [].{
     ## `end` is where this scan stops: the end of `b`, or the `]` of a link
     ## label being scanned in place (`settle`).
     ##
+    ## `schemes` is the href policy (`Link.allows`). It is asked where a link
+    ## is BUILT, so a refused href becomes text here, in the tree, and no
+    ## lowering has to remember to filter it.
+    ##
     ## The rest is what makes an UNMATCHED opener cheap. Each search below runs
     ## to the end of the text when it fails, so a paragraph of `<<<<…` or
     ## `[[[[…` cost a search per opener — quadratic. The facts that answer those
@@ -51,6 +55,7 @@ Scan := [].{
     Ctx : {
         b : List(U8),
         defs : Ref.Index,
+        schemes : Link.Schemes,
         end : U64,
         gt_end : U64,
         rb_end : U64,
@@ -60,10 +65,11 @@ Scan := [].{
         brackets : Link.Known,
     }
 
-    context : List(U8), Ref.Index -> Scan.Ctx
-    context = |b, defs| {
+    context : List(U8), Ref.Index, Link.Schemes -> Scan.Ctx
+    context = |b, defs, schemes| {
         b,
         defs,
+        schemes,
         end: List.len(b),
         gt_end: Scan.end_of_last(b, List.len(b), 62),
         rb_end: Scan.end_of_last(b, List.len(b), 93),
@@ -130,8 +136,8 @@ Scan := [].{
     push_all : Scan.Buf, List(U8) -> Scan.Buf
     push_all = |buf, xs| { ..buf, bytes: List.concat(buf.bytes, xs) }
 
-    run : Str, Ref.Index -> List(Inl)
-    run = |s, defs| Emph.emphasis(Scan.tokens(Scan.context(Str.to_utf8(s), defs), 0, Scan.buf0(0), []))
+    run : Str, Ref.Index, Link.Schemes -> List(Inl)
+    run = |s, defs, schemes| Emph.emphasis(Scan.tokens(Scan.context(Str.to_utf8(s), defs, schemes), 0, Scan.buf0(0), []))
 
     ## --- stage 1: tokens -----------------------------------------------------
     ##
@@ -178,10 +184,8 @@ Scan := [].{
                 ## part is gone.
                 e = Autolink.email_len(ctx.b, i)
                 if e.len > 0 {
-                    n = e.len
-                    addr = Bytes.slice(ctx.b, i, i + n)
-                    node = Node(Inl.at(i, i + n, Link({ href: "mailto:${addr}", title: "", kids: [Inl.at(i, i + n, Text(addr))] })))
-                    Scan.tokens(ctx, i + n, Scan.buf0(i + n), List.append(Scan.flush(buf, i, out), node))
+                    st = Scan.bare_autolink(ctx, i, i + e.len, "mailto:", buf, out)
+                    Scan.tokens(ctx, st.i, st.buf, st.out)
                 } else {
                     ## A miss marks the whole local-part run dead, and the byte
                     ## is dispatched again past this test. Every later boundary
@@ -434,7 +438,7 @@ Scan := [].{
             opener = Scan.push_all(buf, List.sublist(ctx.b, { start: i, len: skip }))
             { i: stop, buf: Scan.buf0(stop), out: List.concat(Scan.flush(opener, i + skip, out), label) }
         } else {
-            nodes = Link.link_node(i, resume, Emph.emphasis(label), parts, image)
+            nodes = Link.link_node(i, resume, Emph.emphasis(label), parts, image, ctx.schemes)
             { i: resume, buf: Scan.buf0(resume), out: List.concat(Scan.flush(buf, i, out), nodes) }
         }
     }
@@ -489,9 +493,9 @@ Scan := [].{
         match Tag.find_tag_end(ctx.b, i + 1) {
             Ok(close) => {
                 inner = Bytes.slice(ctx.b, i + 1, close)
-                if Autolink.is_autolink(inner) and Link.safe_href(inner) {
+                if Autolink.is_autolink(inner) and Link.allows(ctx.schemes, inner) {
                     { i: close + 1, buf: Scan.buf0(close + 1), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 1, Link({ href: inner, title: "", kids: [Inl.at(i + 1, close, Text(inner))] })))) }
-                } else if Autolink.is_email(inner) {
+                } else if Autolink.is_email(inner) and Link.allows(ctx.schemes, "mailto:${inner}") {
                     { i: close + 1, buf: Scan.buf0(close + 1), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 1, Link({ href: "mailto:${inner}", title: "", kids: [Inl.at(i + 1, close, Text(inner))] })))) }
                 } else if Tag.is_tag(inner) {
                     ## Raw inline HTML. It is carried, not dropped and not
@@ -509,15 +513,27 @@ Scan := [].{
 
     bare_link : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
     bare_link = |ctx, i, buf, out| {
-        n = Autolink.bare_len(ctx.b, i)
-        text = Bytes.slice(ctx.b, i, i + n)
-        href = if Bytes.starts(ctx.b, i, "www.") {
-            "http://${text}"
+        prefix = if Bytes.starts(ctx.b, i, "www.") {
+            "http://"
         } else {
-            text
+            ""
         }
-        node = Node(Inl.at(i, i + n, Link({ href: href, title: "", kids: [Inl.at(i, i + n, Text(text))] })))
-        { i: i + n, buf: Scan.buf0(i + n), out: List.append(Scan.flush(buf, i, out), node) }
+        Scan.bare_autolink(ctx, i, i + Autolink.bare_len(ctx.b, i), prefix, buf, out)
+    }
+
+    ## A bare URL or email address spanning `[start, end)`, linked to itself
+    ## behind `prefix` — or, when the href policy refuses that, the same bytes
+    ## as text, which is what a refused link's label becomes too.
+    bare_autolink : Scan.Ctx, U64, U64, Str, Scan.Buf, List(Emph.Tk) -> Scan.Step
+    bare_autolink = |ctx, start, end, prefix, buf, out| {
+        text = Bytes.slice(ctx.b, start, end)
+        href = "${prefix}${text}"
+        if Link.allows(ctx.schemes, href) {
+            node = Node(Inl.at(start, end, Link({ href: href, title: "", kids: [Inl.at(start, end, Text(text))] })))
+            { i: end, buf: Scan.buf0(end), out: List.append(Scan.flush(buf, start, out), node) }
+        } else {
+            { i: end, buf: Scan.push_all(buf, List.sublist(ctx.b, { start, len: end - start })), out: out }
+        }
     }
 
     ## `&name;`, `&#35;`, `&#x22;`. An unknown name is a literal `&`, which is

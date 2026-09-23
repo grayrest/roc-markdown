@@ -5,11 +5,13 @@ roc := env("ROC", "roc")
 default:
     @just --list
 
-# The package's gate — the hand-written expects and the source-location
-# invariants (`LocTest.roc`), which the spec suite cannot see. Builds nothing.
+# The package's gate — the hand-written expects, the source-location
+# invariants (`LocTest.roc`) and the href policy (`SchemesTest.roc`), which the
+# spec suite cannot see. Builds nothing.
 test:
     "{{ roc }}" test package/Test.roc
     "{{ roc }}" test package/LocTest.roc
+    "{{ roc }}" test package/SchemesTest.roc
 
 # Conformance — 676 examples, CommonMark 0.31.2 + GFM. Red at 672 by design.
 spec:

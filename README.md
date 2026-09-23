@@ -23,6 +23,10 @@ blocks = Markdown.parse("# Title\n\nSome **bold** text.")
 html = Markdown.to_html(blocks)
 # <h1>Title</h1>
 # <p>Some <strong>bold</strong> text.</p>
+
+# Content you did not write: link only to the schemes you name.
+untrusted : List(Block)
+untrusted = Markdown.parse_with({ schemes: Only(["http", "https", "mailto"]) }, comment)
 ```
 
 ## Example
@@ -56,8 +60,17 @@ the scope of a parser.
 `<!-- raw HTML omitted -->` rather than passing through; `to_html_unsafe` is the
 opt-in.
 
-Aside from inline HTML, hrefs are filtered by `Link.safe_href`, which refuses
-`javascript:`, `vbscript:`, `data:` and `file:` and allows everything else.
+Aside from inline HTML, link and autolink hrefs are filtered while parsing, and
+a refused href becomes plain text. `parse` uses a DENYLIST: it refuses
+`javascript:`, `vbscript:`, `data:` and `file:` and allows every other scheme,
+including ones invented after it was written. That suits documents you wrote.
+**Untrusted content should use `parse_with({ schemes: Only([...]) }, src)`**,
+which keeps the denylist and adds an allowlist: an href with a scheme links only
+when the scheme is listed (compared ignoring ASCII case), and one with no scheme
+(`/path`, `#frag`, `rel/x`, `?q`) always links. The scheme is everything before
+a `:` that comes before any `/`, `?` or `#`, so `localhost:5001/x` has the
+scheme `localhost`. Listing `javascript` does not allow it. Image `src`s are
+not filtered.
 
 ## Build size: The entity table is the one large constant
 
@@ -89,7 +102,8 @@ time so it's a source edit.
 
 | | |
 |---|---|
-| `parse : Str -> List(Block)` | Markdown in, blocks out. |
+| `parse : Str -> List(Block)` | Markdown in, blocks out. Hrefs pass the scheme denylist. |
+| `parse_with : { schemes : [Any, Only(List(Str))] }, Str -> List(Block)` | `parse` under an href policy: `Any` is `parse`'s denylist, `Only(list)` adds a scheme allowlist. See Safety. |
 | `to_html : List(Block) -> Str` | Semantic HTML. Raw HTML becomes a placeholder comment. |
 | `to_html_unsafe : List(Block) -> Str` | Semantic HTML, raw HTML verbatim. |
 
@@ -131,6 +145,7 @@ package/
   Block.roc  Inl.roc  Span.roc  Doc.roc  Ref.roc   the types
   Test.roc      the gate — hand-written expects
   LocTest.roc   the gate — source-location invariants the spec suite cannot see
+  SchemesTest.roc  the gate — the href policy, `parse` and `parse_with`
   SpecTest.roc  the conformance suite — GENERATED, do not hand-edit
 examples/
   md2html.roc   markdown files in, HTML files out, on basic-cli
