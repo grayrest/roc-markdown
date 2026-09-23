@@ -5,6 +5,7 @@
 ## its label as text. The default is pinned first so the allowlist cannot
 ## quietly change what `parse` has always done.
 import Markdown
+import Link
 
 SchemesTest := [].{
     html : Str -> Str
@@ -133,3 +134,35 @@ expect SchemesTest.web_html("![a](irc:x)") == SchemesTest.text("a")
 expect SchemesTest.html_only(["javascript"], "![a](javascript:x)") == SchemesTest.text("a")
 ## should_refuse_an_unlisted_scheme_in_an_image_reference
 expect SchemesTest.web_html("![a][r]\n\n[r]: irc:x") == SchemesTest.text("a")
+
+## --- the destination a browser would read ------------------------------------
+##
+## A browser's URL parser strips leading and trailing C0 controls and spaces,
+## and drops every ASCII tab and newline, before it reads the scheme. The
+## policy reads the same string, or `\u(1)javascript:` and `java\tscript:`
+## would be scheme-less to it and `javascript:` to the browser.
+
+## should_refuse_javascript_behind_a_leading_control_byte
+expect !Link.allows(Any, "\u(1)javascript:alert(1)")
+## should_refuse_javascript_behind_a_space_and_a_control_byte
+expect !Link.allows(Any, " \u(1f)javascript:x")
+## should_refuse_javascript_split_by_a_tab
+expect !Link.allows(Any, "java\tscript:x")
+## should_refuse_javascript_split_by_a_newline
+expect !Link.allows(Any, "java\nscript:x")
+## should_refuse_javascript_split_by_a_carriage_return
+expect !Link.allows(Any, "java\rscript:x")
+## should_refuse_javascript_with_trailing_controls_when_listed
+expect !Link.allows(Only(["javascript"]), "\u(1)javascript:x\u(1)")
+## should_read_the_scheme_behind_a_leading_control_byte
+expect Link.allows(Only(["https"]), "\u(1)https://x")
+## should_read_the_scheme_across_a_tab
+expect Link.allows(Only(["https"]), "ht\ttps://x")
+## should_allow_a_tab_in_a_scheme_less_path
+expect Link.allows(Only(["https"]), "/a\tb")
+## should_refuse_a_control_prefixed_javascript_link_by_default
+expect SchemesTest.html("[x](<\u(1)javascript:alert(1)>)") == SchemesTest.text("x")
+## should_refuse_an_entity_tab_javascript_link_by_default
+expect SchemesTest.html("[x](<java&#9;script:alert(1)>)") == SchemesTest.text("x")
+## should_refuse_a_control_prefixed_unlisted_scheme
+expect SchemesTest.web_html("[x](<\u(1)irc:x>)") == SchemesTest.text("x")

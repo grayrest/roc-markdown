@@ -71,6 +71,14 @@ when the scheme is listed (compared ignoring ASCII case), and one with no scheme
 a `:` that comes before any `/`, `?` or `#`, so `localhost:5001/x` has the
 scheme `localhost`. Listing `javascript` does not allow it.
 
+Both checks read the destination the way a browser's URL parser does: leading
+and trailing control characters (U+0000–U+001F) and spaces are stripped, and
+every ASCII tab and newline is removed, before the scheme is read. So
+`\x01javascript:` and `java&#9;script:` are refused as `javascript:` in both
+modes. This applies to every destination the policy checks: links, reference
+links, autolinks and (under `Only`) images. The href kept in the tree is the
+one the author wrote.
+
 Image sources are filtered only under `Only`, by the same rule; a refused image
 becomes its alt text. Under `parse` they are not filtered, on purpose: a browser
 does not execute `javascript:` from `<img src>`, and documents you wrote may

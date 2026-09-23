@@ -505,16 +505,79 @@ Link := [].{
     ## Does `schemes` let `href` become a link? A refused href becomes text,
     ## at every site that asks: inline and reference links, every autolink,
     ## and (under `Only`) images.
+    ##
+    ## Both checks read `url_form(href)`, the string a browser takes the scheme
+    ## from, not `href` itself. The href kept in the tree is unchanged.
     allows : Link.Schemes, Str -> Bool
-    allows = |schemes, href|
+    allows = |schemes, href| {
+        url = Link.url_form(href)
         match schemes {
-            Any => Link.safe_href(href)
-            Only(list) => Link.safe_href(href) and Link.scheme_listed(list, href)
+            Any => Link.safe_href(url)
+            Only(list) => Link.safe_href(url) and Link.scheme_listed(list, url)
         }
+    }
+
+    ## `href` as the WHATWG URL parser reads it before looking for a scheme:
+    ## leading and trailing C0 controls (U+0000–U+001F) and spaces stripped,
+    ## and every ASCII tab, LF and CR removed wherever it is. Without this,
+    ## `\u(1)javascript:` and `java\tscript:` (a tab from `&#9;`) pass the
+    ## denylist and read as scheme-less, while a browser, or anything else
+    ## that parses URLs the same way, opens them as `javascript:`.
+    ##
+    ## The `trim` first keeps every refusal the old check made.
+    url_form : Str -> Str
+    url_form = |href| {
+        t = href.trim()
+        b = Str.to_utf8(t)
+        if List.any(b, Link.is_c0_or_space) {
+            kept = List.drop_first(b, Link.lead_c0(b, 0))
+            ends = List.take_first(kept, Link.tail_c0(kept, List.len(kept)))
+            Str.from_utf8_lossy(List.drop_if(ends, Link.is_tab_or_newline))
+        } else {
+            t
+        }
+    }
+
+    ## How many C0-or-space bytes start `b` from `i`.
+    lead_c0 : List(U8), U64 -> U64
+    lead_c0 = |b, i|
+        match List.get(b, i) {
+            Ok(c) if Link.is_c0_or_space(c) => Link.lead_c0(b, i + 1)
+            _ => i
+        }
+
+    ## The length of `b[0, n)` once its trailing C0-or-space bytes are gone.
+    tail_c0 : List(U8), U64 -> U64
+    tail_c0 = |b, n|
+        if n == 0 {
+            0
+        } else if Link.is_c0_or_space(Bytes.at(b, n - 1)) {
+            Link.tail_c0(b, n - 1)
+        } else {
+            n
+        }
+
+    is_c0_or_space : U8 -> Bool
+    is_c0_or_space = |c| c <= Link.space
+
+    is_tab_or_newline : U8 -> Bool
+    is_tab_or_newline = |c| c == Link.tab or c == Link.lf or c == Link.cr
+
+    space : U8
+    space = 32
+
+    tab : U8
+    tab = 9
+
+    lf : U8
+    lf = 10
+
+    cr : U8
+    cr = 13
 
     scheme_listed : List(Str), Str -> Bool
     scheme_listed = |list, href|
-        match Link.scheme_of(href.trim()) {
+        match Link.scheme_of(href) {
             Ok(scheme) => {
                 low = Str.with_ascii_lowercased(scheme)
                 List.any(list, |s| Str.with_ascii_lowercased(s) == low)
@@ -529,11 +592,11 @@ Link := [].{
     ## RFC 3986 spells a scheme `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`,
     ## and that grammar is deliberately NOT checked. A prefix that breaks it
     ## cannot equal a listed scheme, so it is refused, where checking would
-    ## call it scheme-less and let it pass. That is the safe side: a consumer
-    ## that strips tabs and control bytes from a URL, as a browser's URL
-    ## parser does, reads `java\tscript:` (an entity-decoded tab) and
-    ## `\u(1)javascript:` as the scheme they spell. `localhost:5001/foo` has
-    ## the scheme `localhost`, as the RFC and a browser both read it.
+    ## call it scheme-less and let it pass. That is the safe side for any
+    ## repair a URL consumer makes that `url_form` does not copy. `href` is
+    ## in `url_form` already, so `\u(1)https:` and `ht\ttps:` read as
+    ## `https`. `localhost:5001/foo` has the scheme `localhost`, as the RFC
+    ## and a browser both read it.
     scheme_of : Str -> Try(Str, [NoScheme])
     scheme_of = |href| {
         b = Str.to_utf8(href)
@@ -576,9 +639,11 @@ Link := [].{
     ##
     ## `data:` is refused outright rather than allowing image subtypes: nothing
     ## here renders a data URL, so the exception would buy nothing.
+    ##
+    ## `href` is in `url_form` already (`allows`).
     safe_href : Str -> Bool
     safe_href = |href| {
-        low = Str.with_ascii_lowercased(href.trim())
+        low = Str.with_ascii_lowercased(href)
         !low.starts_with("javascript:")
         and !low.starts_with("vbscript:")
         and !low.starts_with("data:")
