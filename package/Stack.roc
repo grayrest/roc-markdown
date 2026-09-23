@@ -757,6 +757,15 @@ Stack := [].{
             }
         }
 
+    ## A block is starting: a blank line pending on the deepest list makes that
+    ## list loose, and every other list forgets its pending blank line.
+    ##
+    ## It walks the whole stack each time, so it is O(depth), not O(1). The
+    ## depth is bounded: `Stack.max_containers` (100) caps the open containers,
+    ## so the stack holds at most that plus the root and one leaf. Tracking the
+    ## deepest list in O(1) would mean keeping its index right through every
+    ## push and close, which costs more to get right than a walk of at most
+    ## 102 entries costs to run.
     mark_content : List(Stack.Open) -> List(Stack.Open)
     mark_content = |st|
         match Stack.deepest_list(st, 0, Err(None)) {
