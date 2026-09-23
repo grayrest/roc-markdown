@@ -115,6 +115,7 @@ package/
   main.roc      package header
   Markdown.roc  the front door
   Stack.roc     phase 1 — block structure, a line at a time against a stack
+  Headings.roc  ATX heading lines: level and text
   Lower.roc     phase 2 — lift the link definitions, then parse the inlines
   Scan.roc      the inline scanner: one left-to-right pass over the bytes
   Emph.roc      delimiter flanking, and the pass that pairs emphasis

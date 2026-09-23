@@ -21,6 +21,7 @@ import Bytes
 import Link
 import Ents
 import Defs
+import Headings
 
 Stack := [].{
     ## What is open. Containers may hold other blocks; leaves accumulate text.
@@ -331,10 +332,10 @@ Stack := [].{
             Stack.setext(st, Lex.setext_level(t), rest, lo)
         } else if ind < 4 and Lex.is_rule(t) {
             Stack.emit(Stack.mark_content(Stack.close_leaf(st)), Doc.mk(lo, Rule))
-        } else if ind < 4 and Stack.atx_level(t) > 0 {
+        } else if ind < 4 and Headings.atx_level(t) > 0 {
             Stack.emit(
                 Stack.mark_content(Stack.close_leaf(st)),
-                Doc.mk(lo, Heading(Stack.atx_level(t), [Loc.seg(lo, Stack.atx_tail(rest), Stack.atx_text(t))])),
+                Doc.mk(lo, Heading(Headings.atx_level(t), [Loc.seg(lo, Headings.atx_tail(rest), Headings.atx_text(t))])),
             )
         } else if ind < 4 and t.starts_with(">") {
             match Stack.strip_quote(rest) {
@@ -422,72 +423,6 @@ Stack := [].{
                     st
                 }
             _ => st
-        }
-    }
-
-    ## ## ATX headings
-
-    ## Both of these are asked of nearly every line, so both start with the
-    ## cheapest possible rejection. Without it they each ran a `split_on` and a
-    ## `join_with` — two allocations and a substring search — to normalise tabs
-    ## in a line that is not a heading and usually has no tab either.
-    atx_level : Str -> U8
-    atx_level = |t|
-        if !t.starts_with("#") {
-            0
-        } else {
-            Stack.atx_at(t)
-        }
-
-    ## `######` is the deepest heading; seven or more hashes are prose.
-    max_atx_level : U64
-    max_atx_level = 6
-
-    atx_at : Str -> U8
-    atx_at = |t| {
-        detabbed = Stack.detab(t)
-        lvl = Lex.leading_hashes(Str.to_utf8(detabbed), 0)
-        rest = Str.drop_first_bytes(detabbed, lvl).ok_or("")
-        if lvl == 0 or lvl > Stack.max_atx_level {
-            0
-        } else if Str.is_empty(rest) or rest.starts_with(" ") {
-            ## In range by the test above, so the narrowing cannot wrap.
-            lvl.to_u8_wrap()
-        } else {
-            ## No space after the run — `#hashtag` is prose.
-            0
-        }
-    }
-
-    detab : Str -> Str
-    detab = |t|
-        if t.contains("\t") {
-            Str.join_with(t.split_on("\t"), " ")
-        } else {
-            t
-        }
-
-    ## The heading's text plus everything phase 1 dropped after it — the closing
-    ## `##` sequence and any trailing spaces — so `Loc.seg` can measure back from
-    ## the line's end. Taken from the UNTRIMMED line for that reason: `atx_text`
-    ## works on `rest.trim()`, and a trimmed tail would place the text as many
-    ## bytes late as the line has trailing whitespace.
-    atx_tail : Str -> Str
-    atx_tail = |rest| {
-        detabbed = Stack.detab(Str.trim_start(rest))
-        lvl = Lex.leading_hashes(Str.to_utf8(detabbed), 0)
-        Str.trim_start(Str.drop_first_bytes(detabbed, lvl).ok_or(""))
-    }
-
-    atx_text : Str -> Str
-    atx_text = |t| {
-        detabbed = Stack.detab(t)
-        lvl = Lex.leading_hashes(Str.to_utf8(detabbed), 0)
-        rest = Str.drop_first_bytes(detabbed, lvl).ok_or("")
-        if Str.is_empty(rest) {
-            ""
-        } else {
-            Lex.drop_closing(rest.trim())
         }
     }
 
