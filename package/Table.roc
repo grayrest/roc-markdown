@@ -21,35 +21,83 @@ Table := [].{
     ##
     ## Alignment comes from the delimiter row too, one entry per column
     ## (`align_of`).
-    parse : List(Loc.Seg), List(Ref.Def), Loc.T -> Block
+    ##
+    ## A LIST of blocks, because a run can end as a table followed by prose:
+    ## the rows past the padding budget (`within_budget`) are a paragraph.
+    parse : List(Loc.Seg), List(Ref.Def), Loc.T -> List(Block)
     parse = |lines, defs, loc| {
         all = List.map(lines, |l| { src: l, cells: Table.cells_of(l) })
-        rows = List.keep_if(all, |r| !Table.is_delim(r.cells))
         if !Table.well_formed(all) {
             ## Not a table at all: the delimiter row must be the SECOND line and
             ## carry exactly as many cells as the header. A run that fails that
             ## is prose that happens to contain pipes, and rendering it as a
             ## one-column table silently drops the rest of every row.
-            Block.mk(loc, Para(Inl.project_all(Scan.run(Loc.joined(lines), defs), lines)))
+            [Table.prose(lines, defs, loc)]
         } else
-        match List.get(rows, 0) {
+        match List.find_first(all, |r| !Table.is_delim(r.cells)) {
             Ok(header) => {
                 n = List.len(header.cells)
                 align = match List.get(all, 1) {
                     Ok(delim) => List.map(delim.cells, Table.align_of)
                     Err(_) => []
                 }
-                Block.mk(loc, Table({
-                    ncols: n,
-                    align: align,
-                    cells: List.join(List.map(rows, |r| Table.fit(r, n, defs))),
-                }))
+                kept = Table.within_budget(all, n, 0, 0)
+                rows = List.keep_if(List.take_first(all, kept), |r| !Table.is_delim(r.cells))
+                table = { ncols: n, align: align, cells: List.join(List.map(rows, |r| Table.fit(r, n, defs))) }
+                rest = List.drop_first(lines, kept)
+                match (List.get(lines, kept - 1), List.first(rest)) {
+                    (Ok(last), Ok(first)) => [
+                        Block.mk(Loc.at(loc.outer.start, last.off + Str.count_utf8_bytes(last.text)), Table(table)),
+                        Table.prose(rest, defs, Loc.at(first.off, loc.outer.end)),
+                    ]
+                    _ => [Block.mk(loc, Table(table))]
+                }
             }
             ## A run that was nothing but a delimiter row. Degrades to an empty
             ## table rather than crashing on the missing header.
-            Err(_) => Block.mk(loc, Table({ ncols: 0, align: [], cells: [] }))
+            Err(_) => [Block.mk(loc, Table({ ncols: 0, align: [], cells: [] }))]
         }
     }
+
+    ## Lines that are not a table, as the paragraph they read as.
+    prose : List(Loc.Seg), List(Ref.Def), Loc.T -> Block
+    prose = |lines, defs, loc| Block.mk(loc, Para(Inl.project_all(Scan.run(Loc.joined(lines), defs), lines)))
+
+    ## How many padded cells one table may hold.
+    ##
+    ## Every other cell is a cell someone wrote, so the source pays for it; a
+    ## padded one is free to ask for. A header of 10,000 cells over 10,000 short
+    ## rows is a 60 KB note and 10^8 cells, and that is not a table anyone
+    ## reads. cmark-gfm caps the same thing (`MAX_AUTOCOMPLETED_CELLS`), for
+    ## the same reason. With it, a table's cells are at most its source bytes
+    ## plus this.
+    max_padded_cells : U64
+    max_padded_cells = 65_536
+
+    ## How many of the run's lines stay the table: all of them, unless padding
+    ## the body rows passes `max_padded_cells`. The row that would pass it, and
+    ## every row after, are left to be prose — the table ends there, as
+    ## cmark-gfm's does, rather than silently losing them.
+    within_budget : List(Table.Row), U64, U64, U64 -> U64
+    within_budget = |all, n, i, padded|
+        match List.get(all, i) {
+            Err(_) => i
+            Ok(r) => {
+                pad = if Table.is_delim(r.cells) {
+                    0
+                } else {
+                    n - Table.min_u64(List.len(r.cells), n)
+                }
+                if padded + pad > Table.max_padded_cells {
+                    i
+                } else {
+                    Table.within_budget(all, n, i + 1, padded + pad)
+                }
+            }
+        }
+
+    min_u64 : U64, U64 -> U64
+    min_u64 = |a, b| if a < b { a } else { b }
 
     ## `| a | b |` to `["a", "b"]`. The leading and trailing pipes are dropped
     ## by discarding an EMPTY first or last cell rather than by stripping the

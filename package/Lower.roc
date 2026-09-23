@@ -19,7 +19,7 @@ Lower := [].{
     run : List(Doc) -> List(Block)
     run = |docs| {
         c = Lower.collect(docs, [], [])
-        List.map(c.docs, |d| Lower.block(d, c.defs))
+        Lower.lower_all(c.docs, c.defs)
     }
 
     ## ## Walk one: lift the definitions out
@@ -100,27 +100,34 @@ Lower := [].{
         }
 
     ## ## Walk two: the leaves become inlines
+    ##
+    ## One `Doc` is usually one `Block`. A table run can be two: the table, and
+    ## the rows past its padding budget as prose (`Table.parse`).
 
-    block : Doc, List(Ref.Def) -> Block
+    block : Doc, List(Ref.Def) -> List(Block)
     block = |d, defs| {
         loc = Loc.at(d.at.start, d.at.end)
         match d.node {
-            Para(segs) => Block.mk(loc, Para(Lower.inlines(segs, defs)))
-            Heading(lvl, segs) => Block.mk(loc, Heading(lvl, Lower.inlines(segs, defs)))
-            Code(c) => Block.mk(loc, Code(c))
-            Quote(ks) => Block.mk(loc, Quote(List.map(ks, |k| Lower.block(k, defs))))
-            Items(i) =>
+            Para(segs) => [Block.mk(loc, Para(Lower.inlines(segs, defs)))]
+            Heading(lvl, segs) => [Block.mk(loc, Heading(lvl, Lower.inlines(segs, defs)))]
+            Code(c) => [Block.mk(loc, Code(c))]
+            Quote(ks) => [Block.mk(loc, Quote(Lower.lower_all(ks, defs)))]
+            Items(i) => [
                 Block.mk(loc, Items({
                     ordered: i.ordered,
                     start: i.start,
                     tight: i.tight,
                     entries: List.map(i.entries, |e| Lower.entry(e, defs)),
-                }))
+                })),
+            ]
             Table(rows) => Table.parse(rows, defs, loc)
-            Html(h) => Block.mk(loc, Html(h))
-            Rule => Block.mk(loc, Rule)
+            Html(h) => [Block.mk(loc, Html(h))]
+            Rule => [Block.mk(loc, Rule)]
         }
     }
+
+    lower_all : List(Doc), List(Ref.Def) -> List(Block)
+    lower_all = |ds, defs| List.join(List.map(ds, |d| Lower.block(d, defs)))
 
     ## Scan a leaf's payload, then map the scanner's offsets back onto the
     ## source through the leaf's line table. The two steps are separate because
@@ -131,7 +138,7 @@ Lower := [].{
 
     entry : Doc.Entry, List(Ref.Def) -> List(Block)
     entry = |e, defs|
-        Lower.with_task(List.map(e.blocks, |b| Lower.block(b, defs)), e.task, e.start)
+        Lower.with_task(Lower.lower_all(e.blocks, defs), e.task, e.start)
 
     ## Put the checkbox back where the marker was — at the head of the entry's
     ## first paragraph.

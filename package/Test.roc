@@ -42,6 +42,23 @@ Test := [].{
             Rule => "R"
         }
 
+    ## Each block's kind only, with a table's width and height: for inputs too
+    ## big to spell out in a shape string.
+    outline : Str -> Str
+    outline = |src| Str.join_with(List.map(Markdown.parse(src), Test.kind), "|")
+
+    kind : Block -> Str
+    kind = |b|
+        match b.node {
+            Table(t) => "T${t.ncols.to_str()}x${(List.len(t.cells) // Test.at_least_one(t.ncols)).to_str()}"
+            Para(_) => "P"
+            Quote(bs) => "Q(${Str.join_with(List.map(bs, Test.kind), "|")})"
+            _ => "B"
+        }
+
+    at_least_one : U64 -> U64
+    at_least_one = |n| if n == 0 { 1 } else { n }
+
     ## An entry is a list of BLOCKS now, so it renders as its blocks — which is
     ## what makes a nested list visible in the shape string instead of a depth
     ## number that had to be read against its neighbours.
@@ -138,6 +155,13 @@ expect Test.shape("| a | b |\n|---|---|\n| c | d |") == "T2(a,b,c,d)"
 ## holds and every renderer is a plain loop.
 expect Test.shape("| a | b |\n|---|---|\n| c |") == "T2(a,b,c,)"
 expect Test.shape("| a | b |\n|---|---|\n| c | d | e |") == "T2(a,b,c,d)"
+## Padding is the one cost a table does not pay for in source bytes: a header
+## of 2000 cells over 2000 one-cell rows would be four million cells. The rows
+## that fit the padding budget stay the table and the rest become prose.
+## should_end_a_table_where_its_padding_passes_the_budget
+expect
+    Test.outline("|${Str.repeat("a|", 2000)}\n|${Str.repeat("-|", 2000)}\n${Str.repeat("a\n", 2000)}")
+    == "T2000x33|P"
 
 ## --- quotes ------------------------------------------------------------------
 expect Test.shape("> quoted") == "Q(P(quoted))"

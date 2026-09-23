@@ -46,6 +46,10 @@ Block := { loc : Loc.T, node : Block.Node }.{
         ## **The parser guarantees `cells.len() == nrows * ncols`** by padding short
         ## rows and truncating long ones.
         ##
+        ## Padding is budgeted (`Table.max_padded_cells`): a run whose short rows
+        ## would need more ends the table at the row that passes the budget, and
+        ## that row and the rest follow as a paragraph.
+        ##
         ## `align` is one entry per column. `None` is a column whose delimiter
         ## carried no colon, and it is a real state rather than a default: it means
         ## "emit no alignment", which is not the same as any of the three.
