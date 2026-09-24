@@ -342,6 +342,11 @@ expect Test.tree("*a* *b* **c**") == "E[a] E[b] S[c]"
 ## paragraph of about 6k escapes (or lines, or links) overflowed it.
 ## should_scan_a_paragraph_of_twenty_thousand_escapes
 expect Test.html(Str.repeat("\\*", 20000)) == "<p>${Str.repeat("*", 20000)}</p>\n"
+## The emphasis pass had the same shape: pairing or demoting a closer called
+## back into the walk, a frame per closer, and 20,000 `*a*` on one line (80 KB)
+## overflowed the stack.
+## should_pair_twenty_thousand_emphases_in_one_paragraph
+expect Test.html(Str.repeat("*a* ", 20000)) == "<p>${Str.repeat("<em>a</em> ", 19999)}<em>a</em></p>\n"
 
 ## --- nesting past the cap -------------------------------------------------------
 ##
