@@ -100,17 +100,35 @@ Loc := [].{
             Err(_) => segs
         }
 
-    ## Map a payload interval `[start, end)` back to the source.
+    ## Where each segment's text starts in the payload `joined` builds: 0, then
+    ## one past the end of the segment before, for the newline between them.
+    ##
+    ## A leaf builds this once, and `project` and `point` binary-search it for
+    ## the line an offset falls on. They used to walk the segments from the
+    ## first for every inline node, so a paragraph of N lines cost N², about
+    ## 19 s for 10,000 lines.
+    line_starts : List(Loc.Seg) -> List(U64)
+    line_starts = |segs| {
+        built = List.fold(
+            segs,
+            { next: 0, out: [] },
+            |acc, s| { next: acc.next + Str.count_utf8_bytes(s.text) + 1, out: List.append(acc.out, acc.next) },
+        )
+        built.out
+    }
+
+    ## Map a payload interval `[start, end)` back to the source. `starts` is
+    ## `Loc.line_starts(segs)`.
     ##
     ## `content` is one interval per line the payload interval touches, which is
     ## why it is a LIST: an inline node spanning a soft line break is two
     ## disjoint source ranges with the second line's stripped prefix between
     ## them. `outer` spans from the first to the last.
-    project : List(Loc.Seg), U64, U64 -> Loc.T
-    project = |segs, start, end| {
-        parts = Loc.parts(segs, start, end, 0, [])
+    project : List(Loc.Seg), List(U64), U64, U64 -> Loc.T
+    project = |segs, starts, start, end| {
+        parts = Loc.parts(segs, starts, start, end, Loc.line_of(starts, start), [])
         match List.first(parts) {
-            Err(_) => Loc.none(Loc.point(segs, start))
+            Err(_) => Loc.none(Loc.point(segs, starts, start))
             Ok(f) =>
                 match List.last(parts) {
                     Ok(l) => { outer: { start: f.start, end: l.end }, content: parts }
@@ -119,42 +137,90 @@ Loc := [].{
         }
     }
 
-    parts : List(Loc.Seg), U64, U64, U64, List(Loc.Ivl) -> List(Loc.Ivl)
-    parts = |segs, start, end, p, out|
-        match List.first(segs) {
-            Err(_) => out
-            Ok(s) => {
-                n = Str.count_utf8_bytes(s.text)
-                lo = Loc.max(start, p)
-                hi = Loc.min(end, p + n)
-                next = if hi > lo {
-                    List.append(out, { start: s.off + (lo - p), end: s.off + (hi - p) })
-                } else {
-                    out
-                }
-                ## `+ 1` for the newline `joined` put between the lines. It is a
-                ## payload byte with no source of its own — the source has the
-                ## stripped prefix there instead — so no interval covers it.
-                Loc.parts(List.drop_first(segs, 1), start, end, p + n + 1, next)
+    ## The source intervals of segments `k` onward that `[start, end)` touches.
+    ## `project` starts at the line `start` falls on: every segment before it
+    ## ends before that line starts, so none of them can touch the interval.
+    parts : List(Loc.Seg), List(U64), U64, U64, U64, List(Loc.Ivl) -> List(Loc.Ivl)
+    parts = |segs, starts, start, end, k, out| {
+        p = Loc.start_of(starts, k)
+        if k >= List.len(segs) or p >= end {
+            out
+        } else {
+            n = Loc.len_of(segs, k)
+            lo = Loc.max(start, p)
+            hi = Loc.min(end, p + n)
+            next = if hi > lo {
+                off = Loc.off_of(segs, k)
+                List.append(out, { start: off + (lo - p), end: off + (hi - p) })
+            } else {
+                out
+            }
+            ## The next segment starts `+ 1` past this one's end, for the
+            ## newline `joined` put between the lines. It is a payload byte
+            ## with no source of its own — the source has the stripped prefix
+            ## there instead — so no interval covers it.
+            Loc.parts(segs, starts, start, end, k + 1, next)
+        }
+    }
+
+    ## Where one payload offset lands in the source, for a zero-width node.
+    ## Past the end of the last segment it is that segment's end.
+    point : List(Loc.Seg), List(U64), U64 -> U64
+    point = |segs, starts, pos| {
+        k = Loc.line_of(starts, pos)
+        p = Loc.start_of(starts, k)
+        n = Loc.len_of(segs, k)
+        off = Loc.off_of(segs, k)
+        if pos <= p + n {
+            off + (pos - p)
+        } else {
+            off + n
+        }
+    }
+
+    ## The last segment that starts at or before payload offset `pos` — the
+    ## line it falls on, or the newline after that line. 0 when there are no
+    ## segments.
+    line_of : List(U64), U64 -> U64
+    line_of = |starts, pos| Loc.search(starts, pos, 0, List.len(starts))
+
+    ## Binary search in `[lo, hi)`: segment `lo` starts at or before `pos`
+    ## (the first segment starts at 0), and none from `hi` on does.
+    search : List(U64), U64, U64, U64 -> U64
+    search = |starts, pos, lo, hi|
+        if hi - lo <= 1 {
+            lo
+        } else {
+            mid = lo + (hi - lo) // 2
+            if Loc.start_of(starts, mid) <= pos {
+                Loc.search(starts, pos, mid, hi)
+            } else {
+                Loc.search(starts, pos, lo, mid)
             }
         }
 
-    ## Where one payload offset lands in the source, for a zero-width node.
-    point : List(Loc.Seg), U64 -> U64
-    point = |segs, pos| Loc.point_in(segs, pos, 0, 0)
+    ## Segment `k`'s payload start, byte length and source offset. Each is 0
+    ## past the last segment, which is what `point` answers for a leaf with
+    ## none.
+    start_of : List(U64), U64 -> U64
+    start_of = |starts, k|
+        match List.get(starts, k) {
+            Ok(p) => p
+            Err(_) => 0
+        }
 
-    point_in : List(Loc.Seg), U64, U64, U64 -> U64
-    point_in = |segs, pos, p, last|
-        match List.first(segs) {
-            Err(_) => last
-            Ok(s) => {
-                n = Str.count_utf8_bytes(s.text)
-                if pos <= p + n {
-                    s.off + (Loc.max(pos, p) - p)
-                } else {
-                    Loc.point_in(List.drop_first(segs, 1), pos, p + n + 1, s.off + n)
-                }
-            }
+    len_of : List(Loc.Seg), U64 -> U64
+    len_of = |segs, k|
+        match List.get(segs, k) {
+            Ok(s) => Str.count_utf8_bytes(s.text)
+            Err(_) => 0
+        }
+
+    off_of : List(Loc.Seg), U64 -> U64
+    off_of = |segs, k|
+        match List.get(segs, k) {
+            Ok(s) => s.off
+            Err(_) => 0
         }
 
     max : U64, U64 -> U64

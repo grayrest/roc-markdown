@@ -69,19 +69,24 @@ Inl := { loc : Loc.T, node : Inl.Node }.{
     ## already gone — and how much came off is a fact about each LINE, so the
     ## table is consulted per line rather than a single base added to everything.
     project_all : List(Inl), List(Loc.Seg) -> List(Inl)
-    project_all = |ks, segs| List.map(ks, |k| Inl.project(k, segs))
+    project_all = |ks, segs| Inl.project_each(ks, segs, Loc.line_starts(segs))
 
-    project : Inl, List(Loc.Seg) -> Inl
-    project = |i, segs| {
+    ## `starts` is the leaf's `Loc.line_starts`, built once by `project_all`
+    ## and shared by every node under it.
+    project_each : List(Inl), List(Loc.Seg), List(U64) -> List(Inl)
+    project_each = |ks, segs, starts| List.map(ks, |k| Inl.project(k, segs, starts))
+
+    project : Inl, List(Loc.Seg), List(U64) -> Inl
+    project = |i, segs, starts| {
         node = match i.node {
-            Emph(ks) => Emph(Inl.project_all(ks, segs))
-            Strong(ks) => Strong(Inl.project_all(ks, segs))
-            Strike(ks) => Strike(Inl.project_all(ks, segs))
-            Link(l) => Link({ ..l, kids: Inl.project_all(l.kids, segs) })
-            Image(m) => Image({ ..m, kids: Inl.project_all(m.kids, segs) })
+            Emph(ks) => Emph(Inl.project_each(ks, segs, starts))
+            Strong(ks) => Strong(Inl.project_each(ks, segs, starts))
+            Strike(ks) => Strike(Inl.project_each(ks, segs, starts))
+            Link(l) => Link({ ..l, kids: Inl.project_each(l.kids, segs, starts) })
+            Image(m) => Image({ ..m, kids: Inl.project_each(m.kids, segs, starts) })
             other => other
         }
-        Inl.{ loc: Loc.project(segs, i.loc.outer.start, i.loc.outer.end), node }
+        Inl.{ loc: Loc.project(segs, starts, i.loc.outer.start, i.loc.outer.end), node }
     }
 
     ## The concatenated text of a subtree, used for an image's alt attribute —

@@ -199,6 +199,34 @@ LocTest := [].{
             Ok(b) => b
             Err(_) => Block.mk(Loc.none(0), Rule)
         }
+
+    ## The location of the first inline node anywhere in the tree whose `outer`
+    ## covers exactly `claim` in the source.
+    loc_of : Str, Str -> Loc.T
+    loc_of = |src, claim| {
+        ns = LocTest.all_inls(List.join(List.map(LocTest.all_blocks(Markdown.parse(src)), LocTest.inls_of)))
+        match List.find_first(ns, |n| LocTest.inl_slice(src, n) == claim) {
+            Ok(n) => n.loc
+            Err(_) => Loc.none(0)
+        }
+    }
+
+    ## The location of the first soft break anywhere in the tree: a node that
+    ## covers only the newline between two lines, which no source byte stands
+    ## for.
+    break_loc : Str -> Loc.T
+    break_loc = |src| {
+        ns = LocTest.all_inls(List.join(List.map(LocTest.all_blocks(Markdown.parse(src)), LocTest.inls_of)))
+        is_break = |n|
+            match n.node {
+                SoftBreak => True
+                _ => False
+            }
+        match List.find_first(ns, is_break) {
+            Ok(n) => n.loc
+            Err(_) => Loc.at(0, 0)
+        }
+    }
 }
 
 # --- (a)/(c') the invariant holds across every stripping site ----------------
@@ -325,3 +353,25 @@ expect
         Ok(b) => b.loc.outer.start == 7
         Err(_) => False
     }
+
+# --- finding a node's line ----------------------------------------------------
+#
+# A payload offset is placed by finding the line it falls on. These pin where
+# the lines meet: a node at a line's first byte, one ending at a line's last
+# byte, one inside the last line, and a soft break, which covers only the
+# newline between two lines and so lands at the end of the first.
+# The source's lines start at bytes 0, 6 and 22, each behind a two-byte `> `.
+
+# should_place_a_node_at_a_lines_first_byte
+expect LocTest.loc_of("> a b\n> **c** d **e**\n> f *g* h", "**c**") == { outer: { start: 8, end: 13 }, content: [{ start: 8, end: 13 }] }
+# should_place_a_node_ending_at_a_lines_last_byte
+expect LocTest.loc_of("> a b\n> **c** d **e**\n> f *g* h", "**e**") == { outer: { start: 16, end: 21 }, content: [{ start: 16, end: 21 }] }
+# should_place_a_node_inside_the_last_line
+expect LocTest.loc_of("> a b\n> **c** d **e**\n> f *g* h", "*g*") == { outer: { start: 26, end: 29 }, content: [{ start: 26, end: 29 }] }
+# should_place_a_soft_break_at_the_end_of_its_line
+expect LocTest.break_loc("> a b\n> **c** d **e**\n> f *g* h") == { outer: { start: 5, end: 5 }, content: [] }
+
+# Each node used to walk the lines from the first, so a paragraph of N lines
+# cost N² — about 19 s for 10,000 lines.
+# should_place_a_node_on_the_last_of_twenty_thousand_lines
+expect LocTest.marked_slice("${Str.repeat("a\n", 20000)}**b**") == "**b**"
