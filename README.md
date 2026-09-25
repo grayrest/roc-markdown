@@ -61,7 +61,10 @@ the scope of a parser.
 opt-in.
 
 Aside from inline HTML, link and autolink hrefs are filtered while parsing, and
-a refused href becomes plain text. `parse` uses a DENYLIST: it refuses
+a refused href becomes plain text. The one exception is an email autolink
+written `<!…>` or `<?…>`: refused, it is read as raw HTML when it also is
+some (a declaration, or an instruction ending in `?>`), which `to_html` omits
+and `to_html_unsafe` passes through. `parse` uses a DENYLIST: it refuses
 `javascript:`, `vbscript:`, `data:` and `file:` and allows every other scheme,
 including ones invented after it was written. That suits documents you wrote.
 **Untrusted content should use `parse_with({ schemes: Only([...]) }, src)`**,

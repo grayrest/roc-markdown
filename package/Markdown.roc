@@ -35,8 +35,10 @@ Markdown := [].{
     ## denylist and adds an allowlist: a link or autolink whose destination
     ## names a scheme links only when that scheme is in `list`, compared
     ## ignoring ASCII case; one with no scheme (`/path`, `#frag`, `rel/x`,
-    ## `?q`) always links. A refused href becomes plain text. Listing
-    ## `javascript` does not allow it.
+    ## `?q`) always links. A refused href becomes plain text, except that a
+    ## refused email autolink written `<!…>` or `<?…>` is read as the raw HTML
+    ## it also is, when it is some (a declaration, or an instruction ending in
+    ## `?>`), which `to_html` omits. Listing `javascript` does not allow it.
     ##
     ## Under `Only`, an image's source passes the same rule or the image
     ## becomes its alt text. Under `Any` images are not filtered: a browser
