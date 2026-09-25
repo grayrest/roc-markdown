@@ -54,9 +54,13 @@ Scan := [].{
     ##    to start an email — see the email branch of `tokens`.
     ##  - `brackets`: the `]` closing each bracket a walk has passed, or that
     ##    none does (`Link.match_bracket`).
+    ##  - `tall_end`: the `]` of the last label refused for its height
+    ##    (`settle`), or 0 for none. A label that ends after it and starts
+    ##    before it holds the refused one.
     ##
     ## `tokens` learns `email_dead` itself; `bracket` learns `brackets` and
-    ## hands them back (`Learned`), and so does a label scan (`settle`).
+    ## `settle` learns `tall_end`, and each hands them back (`Learned`), as
+    ## does a label scan.
     Ctx : {
         b : List(U8),
         defs : Ref.Index,
@@ -68,6 +72,7 @@ Scan := [].{
         brackets : Link.Known,
         gts : List(U64),
         lasts : Tag.Lasts,
+        tall_end : U64,
     }
 
     context : List(U8), Ref.Index, Link.Schemes -> Scan.Ctx
@@ -90,6 +95,7 @@ Scan := [].{
             []
         },
         lasts: Tag.lasts_of(b),
+        tall_end: 0,
     }
 
     ## Every index of `c` in `b` from `i` on, appended to `acc` in order.
@@ -496,17 +502,35 @@ Scan := [].{
         stop = Scan.tks_end(label, i + skip)
         if stop > close or (!image and Link.tks_have_link(label)) {
             Scan.learned(lctx, Scan.splice(lctx, i, skip, stop, label, buf, out))
+        } else if lctx.tall_end > i + skip {
+            ## A label inside this one was refused for its height, and its
+            ## tokens are this label's too, so this one cannot stand shorter
+            ## in practice: a closer inside the refused label that found no
+            ## opener there could pair with one out here instead, but no input
+            ## tried, fuzzed ones at the cap included, has come out shorter.
+            ## It is refused without pairing them again, which every
+            ## enclosing label did: 99 images around one tall label paid for
+            ## it 99 times.
+            Scan.too_tall(lctx, i, skip, close, stop, label, buf, out)
         } else {
             inner = Emph.emphasis(label)
             ## The node would stand one level above its label's tallest, and
             ## past the cap it is refused the way a link in a link is.
             if Emph.height_all(inner) >= Emph.max_depth {
-                Scan.learned(lctx, Scan.splice(lctx, i, skip, stop, label, buf, out))
+                Scan.too_tall(lctx, i, skip, close, stop, label, buf, out)
             } else {
                 nodes = Link.link_node(i, resume, inner, parts, image, lctx.schemes)
                 Scan.learned(lctx, { i: resume, buf: Scan.buf0(resume), out: List.concat(Scan.flush(buf, i, out), nodes) })
             }
         }
+    }
+
+    ## The label closed at `close` is too tall to be a link: it is text, and
+    ## the enclosing labels learn so (`Ctx.tall_end`).
+    too_tall : Scan.Ctx, U64, U64, U64, U64, List(Emph.Tk), Scan.Buf, List(Emph.Tk) -> Scan.Learned
+    too_tall = |ctx, i, skip, close, stop, label, buf, out| {
+        step = Scan.splice(ctx, i, skip, stop, label, buf, out)
+        Scan.learned({ ..ctx, tall_end: close }, step)
     }
 
     ## The bracket is text after all: its opener joins the pending text and

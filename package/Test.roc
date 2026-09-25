@@ -543,6 +543,13 @@ expect
 expect
     Test.html("${Str.repeat("![*", 5000)}a${Str.repeat("*](u)", 5000)}")
     == "<p>${Str.repeat("![<em>![</em>", 25)}<img src=\"u\" alt=\"${Str.repeat("![", 4900)}a${Str.repeat("](u)", 4900)}\" />${Str.repeat("<em>](u)</em>](u)", 25)}</p>\n"
+## A label too tall to be a link is text, and so is every label around it,
+## but each of those paired the refused label's emphasis again to find that
+## out: 99 images around one, beside 25,000 `*a*`, took thirteen seconds.
+## should_refuse_labels_around_a_tall_label_without_pairing_it_again
+expect
+    Test.html("${Str.repeat("![", 99)}${Str.repeat("*", 200)}x${Str.repeat("*", 200)} ${Str.repeat("*a* ", 25000)}${Str.repeat("](u)", 99)}")
+    == "<p>${Str.repeat("![", 99)}${Str.repeat("<strong>", 100)}x${Str.repeat("</strong>", 100)} ${Str.repeat("<em>a</em> ", 25000)}${Str.repeat("](u)", 99)}</p>\n"
 
 ## --- comments, instructions and declarations --------------------------------------
 ##
