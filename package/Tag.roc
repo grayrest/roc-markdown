@@ -32,50 +32,44 @@ Tag := [].{
             Bytes.is_alpha(Bytes.at(cb, 1))
             and Str.is_empty(Bytes.slice(cb, close_len, List.len(cb)).trim())
         } else {
-            c == 33 or c == 63
+            False
         }
     }
 
     ## The `>` that closes a tag, skipping quoted attribute values — one inside
     ## `bam = 'baz <em>"</em>'` closes nothing, and stopping at it cut the tag
-    ## in half.
+    ## in half. Comments, instructions and declarations (`<!…`, `<?…`) are
+    ## not tags and end by other rules (`special_end`).
     ##
-    ## Only a declaration or an instruction (`<!…>`, `<?…>`) searches all the
-    ## way. Anything else gives up at a `<` outside quotes: inside `<…>` that
-    ## one fails every test `Scan.angle` makes of it — not an autolink or an
-    ## email, which may hold no `<`, and not a tag, whose grammar admits one
-    ## only inside a quoted value, paired exactly as this pairs them. Searching
-    ## on to the `>` found the answer no sooner, and `"<a" * 30_000 + ">"`
+    ## The walk gives up at a `<` outside quotes: inside `<…>` that one fails
+    ## every test `Scan.angle` makes of it — not an autolink or an email,
+    ## which may hold no `<`, and not a tag, whose grammar admits one only
+    ## inside a quoted value, paired exactly as this pairs them. Searching on
+    ## to the `>` found the answer no sooner, and `"<a" * 30_000 + ">"`
     ## searched from every `<` to the one at the end.
     find_tag_end : List(U8), U64 -> Try(U64, [NotFound])
-    find_tag_end = |b, i| {
-        c = Bytes.at(b, i)
-        Tag.close_walk(b, i, !(c == 33 or c == 63))
-    }
-
-    close_walk : List(U8), U64, Bool -> Try(U64, [NotFound])
-    close_walk = |b, i, lt_ends|
+    find_tag_end = |b, i|
         if i >= List.len(b) {
             Err(NotFound)
         } else {
             c = Bytes.at(b, i)
             if c == 34 or c == 39 {
                 match Bytes.find_byte(b, i + 1, c) {
-                    Ok(close) => Tag.close_walk(b, close + 1, lt_ends)
+                    Ok(close) => Tag.find_tag_end(b, close + 1)
                     Err(_) => Err(NotFound)
                 }
             } else if c == 62 {
                 Ok(i)
-            } else if c == 60 and lt_ends {
+            } else if c == 60 {
                 Err(NotFound)
             } else {
-                Tag.close_walk(b, i + 1, lt_ends)
+                Tag.find_tag_end(b, i + 1)
             }
         }
 
-    ## An open tag, a closing tag, or a declaration/instruction. Deliberately
-    ## shape-based rather than a tag-name allowlist: the spec's rule is about
-    ## syntax, and an unknown element is still raw HTML.
+    ## An open tag or a closing tag. Deliberately shape-based rather than a
+    ## tag-name allowlist: the spec's rule is about syntax, and an unknown
+    ## element is still raw HTML.
     ##
     ## `a < b` is not a tag because `is_tag` requires a letter or `/` straight
     ## after the `<` — which is also the rule that keeps arithmetic readable.
@@ -181,4 +175,91 @@ Tag := [].{
             Tag.unquoted_len(b, i, acc + 1)
         }
     }
+
+    ## Where the terminator of each construct `special_end` reads last
+    ## starts in the text, plus one, and 0 when it never does. "Some
+    ## occurrence starts at or after `p`" holds exactly when `p` is below
+    ## that, so each search is known to succeed before it runs, and one that
+    ## would fail, running to the end of the text, never does.
+    Lasts : { comment : U64, pi : U64, cdata : U64 }
+
+    ## `Lasts` for `b`, whose three backward scans are skipped when nothing
+    ## in it opens a comment, instruction or CDATA section: unguarded, they
+    ## cost a fifth more on a long paragraph of autolinks.
+    lasts_of : List(U8) -> Tag.Lasts
+    lasts_of = |b|
+        if Tag.has_special(b, 0) {
+            n = List.len(b)
+            {
+                comment: Bytes.seq_last(b, n, Tag.comment_close),
+                pi: Bytes.seq_last(b, n, Tag.pi_close),
+                cdata: Bytes.seq_last(b, n, Tag.cdata_close),
+            }
+        } else {
+            { comment: 0, pi: 0, cdata: 0 }
+        }
+
+    ## Does a `<!` or `<?` start at or after `i`?
+    has_special : List(U8), U64 -> Bool
+    has_special = |b, i|
+        if i + 1 >= List.len(b) {
+            False
+        } else if Bytes.at(b, i) == 60 and (Bytes.at(b, i + 1) == 33 or Bytes.at(b, i + 1) == 63) {
+            True
+        } else {
+            Tag.has_special(b, i + 1)
+        }
+
+    ## `-->`
+    comment_close : List(U8)
+    comment_close = [45, 45, 62]
+
+    ## `?>`
+    pi_close : List(U8)
+    pi_close = [63, 62]
+
+    ## `]]>`
+    cdata_close : List(U8)
+    cdata_close = [93, 93, 62]
+
+    ## One past the end of the comment, processing instruction, CDATA section
+    ## or declaration opened by the `<` at `i`, by CommonMark's rules (0.31.2
+    ## §6.6): each ends at the FIRST occurrence of its own terminator, and
+    ## quotes mean nothing inside any of them. A comment is `<!-->`, `<!--->`
+    ## or `<!--` up to `-->`; an instruction `<?` up to `?>`; CDATA
+    ## `<![CDATA[` up to `]]>`; a declaration `<!` and a letter up to `>`.
+    ##
+    ## They were read as tags, pairing quotes the way attribute values pair,
+    ## which cut `<!-- a > b -->` at its first `>`, and made each `<!"` of a
+    ## paragraph re-pair every quote after it, which was quadratic.
+    ##
+    ## A declaration searches without a `Lasts` entry: the scanner only asks
+    ## when a `>` follows, and it resumes past the one found.
+    special_end : List(U8), U64, Tag.Lasts -> Try(U64, [NotFound])
+    special_end = |b, i, lasts|
+        if Bytes.starts(b, i, "<!-->") {
+            Ok(i + 5)
+        } else if Bytes.starts(b, i, "<!--->") {
+            Ok(i + 6)
+        } else if Bytes.starts(b, i, "<!--") {
+            Tag.close_after(b, i + 4, Tag.comment_close, lasts.comment)
+        } else if Bytes.starts(b, i, "<![CDATA[") {
+            Tag.close_after(b, i + 9, Tag.cdata_close, lasts.cdata)
+        } else if Bytes.starts(b, i, "<?") {
+            Tag.close_after(b, i + 2, Tag.pi_close, lasts.pi)
+        } else if Bytes.starts(b, i, "<!") and Bytes.is_alpha(Bytes.at(b, i + 2)) {
+            Bytes.find_byte(b, i + 3, 62).map_ok(|gt| gt + 1)
+        } else {
+            Err(NotFound)
+        }
+
+    ## One past the first `close` at or after `from`, searched for only when
+    ## `last` (its `Lasts` entry) says there is one.
+    close_after : List(U8), U64, List(U8), U64 -> Try(U64, [NotFound])
+    close_after = |b, from, close, last|
+        if from < last {
+            Bytes.find_seq(b, from, close).map_ok(|at| at + List.len(close))
+        } else {
+            Err(NotFound)
+        }
 }

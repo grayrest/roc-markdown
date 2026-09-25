@@ -77,6 +77,11 @@ Test := [].{
     html : Str -> Str
     html = |src| Markdown.to_html(Markdown.parse(src))
 
+    ## With raw HTML passed through, so an assertion sees where a raw span
+    ## ends, which `html` hides behind one placeholder.
+    unsafe_html : Str -> Str
+    unsafe_html = |src| Markdown.to_html_unsafe(Markdown.parse(src))
+
     ## The inline TREE of the first block, with each container marked by its
     ## kind: `a **b** c` is `a S[b] c`. `text` flattens that structure away, so
     ## a test through it passes whether the parser built a `Strong` or not.
@@ -492,3 +497,25 @@ expect
 expect
     Test.html("${Str.repeat("![*", 5000)}a${Str.repeat("*](u)", 5000)}")
     == "<p>${Str.repeat("![<em>![</em>", 25)}<img src=\"u\" alt=\"${Str.repeat("![", 4900)}a${Str.repeat("](u)", 4900)}\" />${Str.repeat("<em>](u)</em>](u)", 25)}</p>\n"
+
+## --- comments, instructions and declarations --------------------------------------
+##
+## CommonMark ends each at the first occurrence of its own terminator: a comment
+## at `-->`, an instruction at `?>`, CDATA at `]]>`, a declaration (`<!` and a
+## letter) at `>`. Quotes mean nothing inside any of them. The scanner paired
+## quotes in all four as if in a tag's attributes, so every `<!"` of a
+## paragraph re-paired the quotes after it, and 20,000 took fifteen seconds.
+## should_scan_twenty_thousand_bang_quote_openers
+expect Test.html("a ${Str.repeat("<!\"", 20000)}'>") == "<p>a ${Str.repeat("&lt;!&quot;", 20000)}'&gt;</p>\n"
+## should_leave_a_bang_without_a_letter_as_text
+expect Test.unsafe_html("a <!\"x\"> b") == "<p>a &lt;!&quot;x&quot;&gt; b</p>\n"
+## should_end_a_declaration_at_its_first_gt_even_inside_quotes
+expect Test.unsafe_html("a <!x \"y>z\"> b") == "<p>a <!x \"y>z&quot;&gt; b</p>\n"
+## should_keep_a_gt_inside_a_comment
+expect Test.unsafe_html("a <!-- x > y --> b") == "<p>a <!-- x > y --> b</p>\n"
+## should_keep_a_gt_inside_a_processing_instruction
+expect Test.unsafe_html("a <?x > y ?> b") == "<p>a <?x > y ?> b</p>\n"
+## should_leave_an_unterminated_processing_instruction_as_text
+expect Test.unsafe_html("a <?x> b") == "<p>a &lt;?x&gt; b</p>\n"
+## should_leave_an_empty_declaration_as_text
+expect Test.unsafe_html("a <!> b") == "<p>a &lt;!&gt; b</p>\n"

@@ -206,4 +206,34 @@ Autolink := [].{
                 and !s.contains("\\")
             Err(_) => False
         }
+
+    ## The `>` closing an email autolink whose address starts at `from`.
+    ## The search gives up at a `<` or whitespace, which no address may hold,
+    ## so it costs at most the distance to the next of those.
+    email_close : List(U8), U64 -> Try(U64, [NotFound])
+    email_close = |b, from|
+        match Autolink.address_gt(b, from) {
+            Ok(gt) =>
+                if Autolink.is_email(Bytes.slice(b, from, gt)) {
+                    Ok(gt)
+                } else {
+                    Err(NotFound)
+                }
+            Err(_) => Err(NotFound)
+        }
+
+    address_gt : List(U8), U64 -> Try(U64, [NotFound])
+    address_gt = |b, i|
+        if i >= List.len(b) {
+            Err(NotFound)
+        } else {
+            c = Bytes.at(b, i)
+            if c == 62 {
+                Ok(i)
+            } else if c == 60 or Bytes.is_space(c) {
+                Err(NotFound)
+            } else {
+                Autolink.address_gt(b, i + 1)
+            }
+        }
 }

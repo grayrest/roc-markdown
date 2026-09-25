@@ -42,24 +42,24 @@ Scan := [].{
     ##    destination (`Link.match_paren`), which finds its `>` by binary
     ##    search. Built only when the text has both a `(` and a `<`, since a
     ##    destination needs the one and the jump the other; empty otherwise.
+    ##  - `lasts`: where the last `-->`, `?>` and `]]>` start (`Tag.Lasts`). A
+    ##    comment, instruction or CDATA section opened at or beyond one cannot
+    ##    close.
     ##
     ## A closer that DOES exist is no help to those, so the rest are learned
     ## during the scan, from searches that have already run:
     ##
     ##  - `email_dead`: a position below which every word boundary is known not
     ##    to start an email — see the email branch of `tokens`.
-    ##  - `cdata_end`: a CDATA body starting at or past it has no `]]>` after
-    ##    it. It starts at the end of the text and moves down to where a search
-    ##    failed, since one that finds nothing from there finds nothing later.
     ##  - `brackets`: the `]` closing each bracket a walk has passed, or that
     ##    none does (`Link.match_bracket`).
+    ##
+    ## `tokens` learns `email_dead` itself; `bracket` learns `brackets` and
+    ## hands them back (`Learned`).
     ##
     ## `nest` is how many link labels this scan is inside (`settle`). At
     ## `Emph.max_depth` a bracket is text, which bounds the tree and the
     ## scanner's own recursion into labels.
-    ##
-    ## `tokens` learns `email_dead` itself; `angle` and `bracket` learn the
-    ## other two and hand them back (`Learned`).
     Ctx : {
         b : List(U8),
         defs : Ref.Index,
@@ -69,10 +69,10 @@ Scan := [].{
         rb_end : U64,
         tick_last : List(U64),
         email_dead : U64,
-        cdata_end : U64,
         brackets : Link.Known,
         gts : List(U64),
         nest : U64,
+        lasts : Tag.Lasts,
     }
 
     context : List(U8), Ref.Index, Link.Schemes -> Scan.Ctx
@@ -89,7 +89,6 @@ Scan := [].{
             []
         },
         email_dead: 0,
-        cdata_end: List.len(b),
         brackets: Dict.empty(),
         gts: if List.contains(b, 40) and List.contains(b, 60) {
             Scan.positions(b, 62, 0, [])
@@ -97,6 +96,7 @@ Scan := [].{
             []
         },
         nest: 0,
+        lasts: Tag.lasts_of(b),
     }
 
     ## Every index of `c` in `b` from `i` on, appended to `acc` in order.
@@ -224,7 +224,7 @@ Scan := [].{
                 Scan.tokens(ctx, st.i, st.buf, st.out)
             } else if c == 60 {
                 st = Scan.angle(ctx, i, buf, out)
-                Scan.tokens(st.ctx, st.i, st.buf, st.out)
+                Scan.tokens(ctx, st.i, st.buf, st.out)
             } else if c == 91 {
                 st = Scan.bracket(ctx, i, 1, buf, out, False)
                 Scan.tokens(st.ctx, st.i, st.buf, st.out)
@@ -442,7 +442,7 @@ Scan := [].{
         match Dict.get(ctx.brackets, from) {
             Ok(known) => { close: known, ctx }
             Err(_) => {
-                walk = Link.match_bracket(ctx.b, from, ctx.gt_end, ctx.tick_last, ctx.brackets)
+                walk = Link.match_bracket(ctx.b, from, { gt_end: ctx.gt_end, tick_last: ctx.tick_last, lasts: ctx.lasts }, ctx.brackets)
                 { close: walk.close, ctx: { ..ctx, brackets: walk.known } }
             }
         }
@@ -515,35 +515,60 @@ Scan := [].{
         { i: i + skip, buf: Scan.push_all(buf, List.sublist(ctx.b, { start: i, len: skip })), out: out }
 
     ## `<https://x>` and `<a@b.c>` become links to themselves, and a
-    ## well-formed tag becomes a `Raw` node. Anything else in angle brackets is
-    ## left literal. Whether raw HTML reaches the output is the LOWERING's
-    ## decision (see the tag branch below), not the scanner's.
-    angle : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Learned
+    ## well-formed tag, comment, instruction, CDATA section or declaration
+    ## becomes a `Raw` node. Anything else in angle brackets is left literal.
+    ## Whether raw HTML reaches the output is the LOWERING's decision (see the
+    ## tag branch below), not the scanner's.
+    angle : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
     angle = |ctx, i, buf, out|
         if i + 1 >= ctx.gt_end {
             ## No `>` anywhere after this, so nothing here can close.
-            Scan.learned(ctx, { i: i + 1, buf: Scan.push(buf, 60), out: out })
-        } else if Bytes.starts(ctx.b, i, "<![CDATA[") {
-            Scan.cdata(ctx, i, buf, out)
+            Scan.lt(i, buf, out)
+        } else if Bytes.at(ctx.b, i + 1) == 33 or Bytes.at(ctx.b, i + 1) == 63 {
+            Scan.special(ctx, i, buf, out)
         } else {
-            Scan.learned(ctx, Scan.tag(ctx, i, buf, out))
+            Scan.tag(ctx, i, buf, out)
         }
 
-    ## CDATA ends at `]]>`, and its body may contain `>` — searching for the
-    ## first one cut it in half.
-    cdata : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Learned
-    cdata = |ctx, i, buf, out| {
-        body = i + 9
-        lt = { i: i + 1, buf: Scan.push(buf, 60), out: out }
-        if body >= ctx.cdata_end {
-            Scan.learned(ctx, lt)
-        } else
-        match Bytes.find_cdata(ctx.b, body) {
-            Ok(close) =>
-                Scan.learned(ctx, { i: close + 3, buf: Scan.buf0(close + 3), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 3, Raw(Bytes.slice(ctx.b, i, close + 3))))) })
-            Err(_) => Scan.learned({ ..ctx, cdata_end: body }, lt)
+    ## The `<` at `i` as text.
+    lt : U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
+    lt = |i, buf, out| { i: i + 1, buf: Scan.push(buf, 60), out: out }
+
+    ## `<!` or `<?`: an email autolink first, since `!` and `?` may start an
+    ## address and an autolink outranks raw HTML, so `<!a@b.co>` is a mail
+    ## link; else a comment, instruction, CDATA section or declaration
+    ## (`Tag.special_end`). The address search stops at the next `<` or
+    ## whitespace, so trying it first costs no more than the text to there.
+    ##
+    ## An address the href policy refuses is not a link, and is then read as
+    ## raw HTML like any other `<!`, the way `tag` falls through.
+    special : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
+    special = |ctx, i, buf, out|
+        match Scan.mail_close(ctx, i) {
+            Ok(close) => {
+                inner = Bytes.slice(ctx.b, i + 1, close)
+                Scan.angle_link(i, close, "mailto:${inner}", inner, buf, out)
+            }
+            Err(_) =>
+                match Tag.special_end(ctx.b, i, ctx.lasts) {
+                    Ok(end) => Scan.raw(i, end, Bytes.slice(ctx.b, i, end), buf, out)
+                    Err(_) => Scan.lt(i, buf, out)
+                }
         }
-    }
+
+    ## The `>` closing an email autolink opened by the `<` at `i`, when the
+    ## href policy lets it link.
+    mail_close : Scan.Ctx, U64 -> Try(U64, [NotFound])
+    mail_close = |ctx, i|
+        match Autolink.email_close(ctx.b, i + 1) {
+            Ok(close) =>
+                if Link.allows(ctx.schemes, "mailto:${Bytes.slice(ctx.b, i + 1, close)}") {
+                    Ok(close)
+                } else {
+                    Err(NotFound)
+                }
+            Err(_) => Err(NotFound)
+        }
 
     tag : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
     tag = |ctx, i, buf, out|
@@ -551,22 +576,32 @@ Scan := [].{
             Ok(close) => {
                 inner = Bytes.slice(ctx.b, i + 1, close)
                 if Autolink.is_autolink(inner) and Link.allows(ctx.schemes, inner) {
-                    { i: close + 1, buf: Scan.buf0(close + 1), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 1, Link({ href: inner, title: "", kids: [Inl.at(i + 1, close, Text(inner))] })))) }
+                    Scan.angle_link(i, close, inner, inner, buf, out)
                 } else if Autolink.is_email(inner) and Link.allows(ctx.schemes, "mailto:${inner}") {
-                    { i: close + 1, buf: Scan.buf0(close + 1), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 1, Link({ href: "mailto:${inner}", title: "", kids: [Inl.at(i + 1, close, Text(inner))] })))) }
+                    Scan.angle_link(i, close, "mailto:${inner}", inner, buf, out)
                 } else if Tag.is_tag(inner) {
                     ## Raw inline HTML. It is carried, not dropped and not
                     ## escaped here — what happens to it is the LOWERING's
                     ## decision, and the two lowerings disagree: `to_html`
                     ## passes it through (or omits it, when safe), while a
                     ## native renderer has no HTML engine and shows it as text.
-                    { i: close + 1, buf: Scan.buf0(close + 1), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 1, Raw("<${inner}>")))) }
+                    Scan.raw(i, close + 1, "<${inner}>", buf, out)
                 } else {
-                    { i: i + 1, buf: Scan.push(buf, 60), out: out }
+                    Scan.lt(i, buf, out)
                 }
             }
-            Err(_) => { i: i + 1, buf: Scan.push(buf, 60), out: out }
+            Err(_) => Scan.lt(i, buf, out)
         }
+
+    ## An autolink from the `<` at `i` to the `>` at `close`, showing `text`.
+    angle_link : U64, U64, Str, Str, Scan.Buf, List(Emph.Tk) -> Scan.Step
+    angle_link = |i, close, href, text, buf, out|
+        { i: close + 1, buf: Scan.buf0(close + 1), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + 1, Link({ href, title: "", kids: [Inl.at(i + 1, close, Text(text))] })))) }
+
+    ## Raw HTML spanning `[i, end)`.
+    raw : U64, U64, Str, Scan.Buf, List(Emph.Tk) -> Scan.Step
+    raw = |i, end, html, buf, out|
+        { i: end, buf: Scan.buf0(end), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, end, Raw(html)))) }
 
     bare_link : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
     bare_link = |ctx, i, buf, out| {

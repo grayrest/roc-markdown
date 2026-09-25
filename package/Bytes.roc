@@ -75,14 +75,27 @@ Bytes := [].{
             Bytes.find_unescaped(b, i + 1, c)
         }
 
-    find_cdata : List(U8), U64 -> Try(U64, [NotFound])
-    find_cdata = |b, i|
-        if i + 2 >= List.len(b) {
+    ## The first occurrence of `seq` starting at or after `i`.
+    find_seq : List(U8), U64, List(U8) -> Try(U64, [NotFound])
+    find_seq = |b, i, seq|
+        if i + List.len(seq) > List.len(b) {
             Err(NotFound)
-        } else if Bytes.at(b, i) == 93 and Bytes.at(b, i + 1) == 93 and Bytes.at(b, i + 2) == 62 {
+        } else if List.sublist(b, { start: i, len: List.len(seq) }) == seq {
             Ok(i)
         } else {
-            Bytes.find_cdata(b, i + 1)
+            Bytes.find_seq(b, i + 1, seq)
+        }
+
+    ## One past where the last occurrence of `seq` starting before `i` starts,
+    ## or 0 when none does.
+    seq_last : List(U8), U64, List(U8) -> U64
+    seq_last = |b, i, seq|
+        if i == 0 {
+            0
+        } else if List.sublist(b, { start: i - 1, len: List.len(seq) }) == seq {
+            i
+        } else {
+            Bytes.seq_last(b, i - 1, seq)
         }
 
     starts : List(U8), U64, Str -> Bool
