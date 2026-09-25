@@ -541,10 +541,14 @@ Link := [].{
 
     link_node : U64, U64, List(Inl), { dest : Str, title : Str, ok : Bool }, Bool, Link.Schemes -> List(Emph.Tk)
     link_node = |start, end, label, parts, image, schemes|
-        if !Link.admits(schemes, parts.dest, image) {
+        if !Link.admits(schemes, parts.dest, image) and image {
+            ## An image's label is its alt text, so a refused image becomes
+            ## that: plain text, as an accepted image's alt is, and not the
+            ## emphasis or links the label held.
+            [Node(Inl.at(start, end, Text(Inl.text_of(label))))]
+        } else if !Link.admits(schemes, parts.dest, image) {
             ## The label survives as ordinary content — spliced, not wrapped, so
-            ## a rejected href leaves no trace in the tree. An image's label is
-            ## its alt text, so a refused image becomes that.
+            ## a rejected href leaves no trace in the tree.
             List.map(label, |n| Node(n))
         } else if image {
             [Node(Inl.at(start, end, Image({ src: parts.dest, title: parts.title, kids: label })))]

@@ -140,6 +140,11 @@ expect SchemesTest.html_only(["javascript"], "![a](javascript:x)") == SchemesTes
 ## should_refuse_an_unlisted_scheme_in_an_image_reference
 expect SchemesTest.web_html("![a][r]\n\n[r]: irc:x") == SchemesTest.text("a")
 
+## A refused image is its alt text, which is plain text: the emphasis and
+## the link its label held are gone, as they are from an accepted one's `alt`.
+## should_render_a_refused_image_as_its_plain_alt_text
+expect SchemesTest.web_html("![*a* [b](https://x)](irc:y)") == SchemesTest.text("a b")
+
 ## --- the destination a browser would read ------------------------------------
 ##
 ## A browser's URL parser strips leading and trailing C0 controls and spaces,
