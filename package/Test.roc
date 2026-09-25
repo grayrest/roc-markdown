@@ -351,6 +351,20 @@ expect Test.html("[a <b c=\">]\"> d](u)") == "<p><a href=\"u\">a <!-- raw HTML o
 ## should_close_a_bracket_the_way_the_scanner_reads_a_refused_autolink
 expect Test.html("[<javascript:a`b> `]` ](u)") == "<p>[&lt;javascript:a<code>b&gt; </code>]` ](u)</p>\n"
 
+## --- email autolinks ----------------------------------------------------------
+##
+## `<…>` is an address by CommonMark's grammar, tried before a tag. Read as a
+## tag first, the `'` in `<o'r@x.co>` paired as an attribute quote and left
+## it text, while `<!o'r@x.co>` linked; and a looser address test linked
+## what the grammar does not allow.
+## should_link_an_address_holding_an_apostrophe
+expect Test.html("a <o'r@x.co> b") == "<p>a <a href=\"mailto:o'r@x.co\">o'r@x.co</a> b</p>\n"
+## should_leave_an_address_with_a_bracket_in_its_local_part_as_text
+expect Test.html("a <?a[b@c.d> b") == "<p>a &lt;?a[b@c.d&gt; b</p>\n"
+## The grammar asks for no dot in the domain, and cmark links this too.
+## should_link_an_address_with_a_dotless_domain
+expect Test.html("a <a@b> c") == "<p>a <a href=\"mailto:a@b\">a@b</a> c</p>\n"
+
 ## --- unmatched openers --------------------------------------------------------
 ##
 ## Each of these used to search to the end of the paragraph for a closer that

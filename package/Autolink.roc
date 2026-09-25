@@ -190,22 +190,64 @@ Autolink := [].{
         }
     }
 
-    ## Deliberately crude: one `@`, a dot after it, no spaces. The spec gives a
-    ## full grammar; this rejects nothing a document actually contains and keeps
-    ## `a < b` from becoming a mail link.
+    ## An email autolink's address, by CommonMark §6.5's grammar: a local part
+    ## of letters, digits and ``.!#$%&'*+/=?^_`{|}~-``, an `@`, then labels of
+    ## letters, digits and inner hyphens, each at most 63 long, joined by dots.
+    ## The domain needs no dot, so `<a@b>` is an address, as in cmark.
+    ##
+    ## A cruder test ("an `@`, a dot after it, no spaces") let anything else
+    ## in once the address was tried before a tag: fuzzing turned
+    ## ``<bhttp://y.org````1.@(u)www.x.com">`` into a mail link. The GFM bare
+    ## address in text has its own grammar (`email_len`).
     is_email : Str -> Bool
-    is_email = |s|
-        match s.split_first("@") {
-            Ok(p) =>
-                !Str.is_empty(p.before)
-                and p.after.contains(".")
-                and !s.contains(" ")
-                and !s.contains("<")
-                ## A backslash is not a legal address character, and admitting
-                ## one turned `<foo\+@bar.example.com>` into a mail link.
-                and !s.contains("\\")
-            Err(_) => False
+    is_email = |s| {
+        b = Str.to_utf8(s)
+        at = Autolink.local_run(b, 0)
+        at > 0 and Bytes.at(b, at) == 64 and Autolink.domain_ok(b, at + 1, 0)
+    }
+
+    ## Where the run of local-part characters from `i` ends.
+    local_run : List(U8), U64 -> U64
+    local_run = |b, i|
+        if i < List.len(b) and Autolink.is_local_char(Bytes.at(b, i)) {
+            Autolink.local_run(b, i + 1)
+        } else {
+            i
         }
+
+    is_local_char : U8 -> Bool
+    is_local_char = |c| Autolink.is_alnum(c) or List.contains(Autolink.local_punct, c)
+
+    ## The punctuation an address's local part may hold.
+    local_punct : List(U8)
+    local_punct = Str.to_utf8(".!#$%&'*+/=?^_`{|}~-")
+
+    is_alnum : U8 -> Bool
+    is_alnum = |c| Bytes.is_alpha(c) or (c >= 48 and c <= 57)
+
+    ## Are the bytes from `i` to the end the rest of a domain whose current
+    ## label is `len` bytes long so far? A label starts and ends with a letter
+    ## or digit.
+    domain_ok : List(U8), U64, U64 -> Bool
+    domain_ok = |b, i, len|
+        if i >= List.len(b) {
+            len > 0 and Bytes.at(b, i - 1) != 45
+        } else {
+            c = Bytes.at(b, i)
+            if Autolink.is_alnum(c) and len < Autolink.max_domain_label {
+                Autolink.domain_ok(b, i + 1, len + 1)
+            } else if c == 45 and len > 0 and len < Autolink.max_domain_label {
+                Autolink.domain_ok(b, i + 1, len + 1)
+            } else if c == 46 and len > 0 and Bytes.at(b, i - 1) != 45 {
+                Autolink.domain_ok(b, i + 1, 0)
+            } else {
+                False
+            }
+        }
+
+    ## The longest label a domain may hold (§6.5, after RFC 1035).
+    max_domain_label : U64
+    max_domain_label = 63
 
     ## The `>` closing an email autolink whose address starts at `from`.
     ## The search gives up at a `<` or whitespace, which no address may hold,

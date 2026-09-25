@@ -564,41 +564,44 @@ Scan := [].{
     ## becomes a `Raw` node. Anything else in angle brackets is left literal.
     ## Whether raw HTML reaches the output is the LOWERING's decision (see the
     ## tag branch below), not the scanner's.
+    ##
+    ## An email address is tried first, whatever follows the `<`: an autolink
+    ## outranks raw HTML, and an address may start with `!` or `?` and hold a
+    ## `'`, which the tag reading pairs as an attribute quote, so
+    ## `<o'r@x.co>` was text while `<!o'r@x.co>` linked. The address search
+    ## stops at the next `<` or whitespace, so trying it first costs no more
+    ## than the text to there. An address the href policy refuses is not a
+    ## link, and is read as raw HTML or text like any other `<…>`.
     angle : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
     angle = |ctx, i, buf, out|
         if i + 1 >= ctx.gt_end {
             ## No `>` anywhere after this, so nothing here can close.
             Scan.lt(i, buf, out)
-        } else if Bytes.at(ctx.b, i + 1) == 33 or Bytes.at(ctx.b, i + 1) == 63 {
-            Scan.special(ctx, i, buf, out)
-        } else {
-            Scan.tag(ctx, i, buf, out)
-        }
-
-    ## The `<` at `i` as text.
-    lt : U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
-    lt = |i, buf, out| { i: i + 1, buf: Scan.push(buf, 60), out: out }
-
-    ## `<!` or `<?`: an email autolink first, since `!` and `?` may start an
-    ## address and an autolink outranks raw HTML, so `<!a@b.co>` is a mail
-    ## link; else a comment, instruction, CDATA section or declaration
-    ## (`Tag.special_end`). The address search stops at the next `<` or
-    ## whitespace, so trying it first costs no more than the text to there.
-    ##
-    ## An address the href policy refuses is not a link, and is then read as
-    ## raw HTML like any other `<!`, the way `tag` falls through.
-    special : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
-    special = |ctx, i, buf, out|
+        } else
         match Scan.mail_close(ctx, i) {
             Ok(close) => {
                 inner = Bytes.slice(ctx.b, i + 1, close)
                 Scan.angle_link(i, close, "mailto:${inner}", inner, buf, out)
             }
             Err(_) =>
-                match Tag.special_end(ctx.b, i, ctx.lasts) {
-                    Ok(end) => Scan.raw(i, end, Bytes.slice(ctx.b, i, end), buf, out)
-                    Err(_) => Scan.lt(i, buf, out)
+                if Bytes.at(ctx.b, i + 1) == 33 or Bytes.at(ctx.b, i + 1) == 63 {
+                    Scan.special(ctx, i, buf, out)
+                } else {
+                    Scan.tag(ctx, i, buf, out)
                 }
+        }
+
+    ## The `<` at `i` as text.
+    lt : U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
+    lt = |i, buf, out| { i: i + 1, buf: Scan.push(buf, 60), out: out }
+
+    ## `<!` or `<?` that is not an address: a comment, instruction, CDATA
+    ## section or declaration (`Tag.special_end`), or text.
+    special : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
+    special = |ctx, i, buf, out|
+        match Tag.special_end(ctx.b, i, ctx.lasts) {
+            Ok(end) => Scan.raw(i, end, Bytes.slice(ctx.b, i, end), buf, out)
+            Err(_) => Scan.lt(i, buf, out)
         }
 
     ## The `>` closing an email autolink opened by the `<` at `i`, when the
@@ -615,6 +618,9 @@ Scan := [].{
             Err(_) => Err(NotFound)
         }
 
+    ## Any other `<` that is not an address: a URI autolink, a tag, or text.
+    ## No address is left to find here: one holds no `>`, `<` or whitespace,
+    ## so the `>` this finds would be the one `mail_close` already tried.
     tag : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> Scan.Step
     tag = |ctx, i, buf, out|
         match Tag.find_tag_end(ctx.b, i + 1) {
@@ -622,8 +628,6 @@ Scan := [].{
                 inner = Bytes.slice(ctx.b, i + 1, close)
                 if Autolink.is_autolink(inner) and Link.allows(ctx.schemes, inner) {
                     Scan.angle_link(i, close, inner, inner, buf, out)
-                } else if Autolink.is_email(inner) and Link.allows(ctx.schemes, "mailto:${inner}") {
-                    Scan.angle_link(i, close, "mailto:${inner}", inner, buf, out)
                 } else if Tag.is_tag(inner) {
                     ## Raw inline HTML. It is carried, not dropped and not
                     ## escaped here — what happens to it is the LOWERING's

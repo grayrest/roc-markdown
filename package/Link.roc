@@ -261,46 +261,51 @@ Link := [].{
     ## opens nothing. The rules are the scanner's, so the two agree on what
     ## a bracket inside it means.
     ##
-    ## `<!` and `<?` go the way `Scan.special` takes them: an email address
-    ## the href policy lets link, then a comment, instruction, CDATA section
-    ## or declaration (`Tag.special_end`).
-    ##
-    ## Anything else goes the way `Scan.tag` takes it: its end is
+    ## The order is `Scan.angle`'s: an email address the href policy lets
+    ## link, whatever follows the `<`; then for `<!` and `<?` a comment,
+    ## instruction, CDATA section or declaration (`Tag.special_end`), and for
+    ## anything else what `Scan.tag` makes one node of (`tag_end`).
+    opaque_end : List(U8), U64, Link.Ends -> Try(U64, [NotFound])
+    opaque_end = |b, i, ends|
+        if i + 1 >= ends.gt_end {
+            Err(NotFound)
+        } else
+        match Autolink.email_close(b, i + 1) {
+            Ok(gt) if Link.allows(ends.schemes, "mailto:${Bytes.slice(b, i + 1, gt)}") => Ok(gt)
+            _ =>
+                if Bytes.at(b, i + 1) == 33 or Bytes.at(b, i + 1) == 63 {
+                    Tag.special_end(b, i, ends.lasts).map_ok(|end| end - 1)
+                } else {
+                    Link.tag_end(b, i, ends)
+                }
+        }
+
+    ## `opaque_end` for a `<` that is not an address. Its end is
     ## `Tag.find_tag_end`'s, which skips a `>` inside a quoted value, and what
     ## lies between must be what `Scan.tag` makes one node of (`is_opaque`).
     ## The walk used to stop at the first `>` whatever the quotes, and to count
     ## an autolink the policy refuses, so `[a <b c=">]"> d](u)` was not a link
     ## and a refused `<javascript:…>` hid a `]` the scanner reads as text.
-    opaque_end : List(U8), U64, Link.Ends -> Try(U64, [NotFound])
-    opaque_end = |b, i, ends|
-        if i + 1 >= ends.gt_end {
-            Err(NotFound)
-        } else if Bytes.at(b, i + 1) == 33 or Bytes.at(b, i + 1) == 63 {
-            match Autolink.email_close(b, i + 1) {
-                Ok(gt) if Link.allows(ends.schemes, "mailto:${Bytes.slice(b, i + 1, gt)}") => Ok(gt)
-                _ => Tag.special_end(b, i, ends.lasts).map_ok(|end| end - 1)
-            }
-        } else {
-            match Tag.find_tag_end(b, i + 1) {
-                Ok(gt) =>
-                    if Link.is_opaque(Bytes.slice(b, i + 1, gt), ends.schemes) {
-                        Ok(gt)
-                    } else {
-                        Err(NotFound)
-                    }
-                Err(_) => Err(NotFound)
-            }
+    tag_end : List(U8), U64, Link.Ends -> Try(U64, [NotFound])
+    tag_end = |b, i, ends|
+        match Tag.find_tag_end(b, i + 1) {
+            Ok(gt) =>
+                if Link.is_opaque(Bytes.slice(b, i + 1, gt), ends.schemes) {
+                    Ok(gt)
+                } else {
+                    Err(NotFound)
+                }
+            Err(_) => Err(NotFound)
         }
 
     ## A raw tag or an autolink is opaque to bracket matching, so
     ## `[foo <bar attr="](baz)">` does not close at the `]` sitting inside an
     ## attribute value. The tests and their order are `Scan.tag`'s: an
-    ## autolink or an address counts only when the policy lets it link, and a
-    ## refused one falls through to being a tag, or to text.
+    ## autolink counts only when the policy lets it link, and a refused one
+    ## falls through to being a tag, or to text.
     is_opaque : Str, Link.Schemes -> Bool
     is_opaque = |inner, schemes|
         (Autolink.is_autolink(inner) and Link.allows(schemes, inner))
-        or (Autolink.is_email(inner) and Link.allows(schemes, "mailto:${inner}"))
         or Tag.is_tag(inner)
 
     ## The `)` closing an inline link's destination and title, by counting
