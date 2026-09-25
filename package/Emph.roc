@@ -26,19 +26,47 @@ Emph := [].{
 
     Floor : { kind : Emph.Kind, at : U64 }
 
-    ## An entry of the pairing stack: a token, and how many emphasis nodes deep
-    ## it is — 0 for a delimiter or a scanned node, one more than its deepest
-    ## child for a node `join` built.
+    ## An entry of the pairing stack: a token, and how many levels deep it is
+    ## — 0 for a delimiter, a scanned node's `height`, one more than its
+    ## deepest child for a node `join` built.
     Slot : { tk : Emph.Tk, depth : U64 }
 
-    ## How deeply emphasis may nest. A pairing that would go deeper leaves its
-    ## closer as text, like one with no opener.
+    ## How tall the inline tree may grow. Emphasis, strikethrough, links and
+    ## images each count one level (`height`), as markdown-it's `maxNesting`
+    ## counts them all together. A pairing that would go deeper leaves its
+    ## closer as text, like one with no opener; `Scan` leaves a bracket as
+    ## text when it is this many labels deep, or when its link would be.
     ##
     ## Every walk of the inline tree recurses once per level, and a run of
     ## 20,000 `*` either side of a word nests 10,000 `Strong`s in linear time,
     ## which overflowed the stack as a SIGSEGV. Real text nests two or three.
+    ## Links and images once counted as leaves, so 5000 nested images, or
+    ## images nested in emphasis, overflowed it too. One cap for all of them,
+    ## not one each: 100 links deep with 100 emphasis levels in each is 10,000
+    ## levels.
     max_depth : U64
     max_depth = 100
+
+    ## How many levels `n` stands on its own: one for each emphasis,
+    ## strikethrough, link or image on its deepest path, 0 for a leaf. It
+    ## walks the subtree, which `max_depth` keeps short.
+    height : Inl -> U64
+    height = |n|
+        match n.node {
+            Emph(ks) => 1 + Emph.height_all(ks)
+            Strong(ks) => 1 + Emph.height_all(ks)
+            Strike(ks) => 1 + Emph.height_all(ks)
+            Link(l) => 1 + Emph.height_all(l.kids)
+            Image(m) => 1 + Emph.height_all(m.kids)
+            _ => 0
+        }
+
+    ## The tallest of `ns`, 0 for none.
+    height_all : List(Inl) -> U64
+    height_all = |ns| List.fold(ns, 0, |m, k| Emph.max_u64(m, Emph.height(k)))
+
+    max_u64 : U64, U64 -> U64
+    max_u64 = |a, b| if a > b { a } else { b }
 
     ## Whether a delimiter run can open, close, both or neither.
     ##
@@ -151,7 +179,11 @@ Emph := [].{
     emphasis = |tks| Emph.emph_walk(tks, 0, { stack: [], floors: [], pending: Idle })
 
     slot : Emph.Tk -> Emph.Slot
-    slot = |tk| { tk, depth: 0 }
+    slot = |tk|
+        match tk {
+            Node(n) => { tk, depth: Emph.height(n) }
+            Delim(_) => { tk, depth: 0 }
+        }
 
     ## Where the walk stands between steps: ready for the next token (`Idle`),
     ## or still pairing what is left of a closer it has already taken.

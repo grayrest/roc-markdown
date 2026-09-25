@@ -470,3 +470,25 @@ expect {
     table = Block.mk(Loc.none(0), Table({ ncols: 1, align: [None], cells: List.repeat(cell, 200001) }))
     Html.render([table], True) == "<table>\n<thead>\n<tr>\n<th>a</th>\n</tr>\n</thead>\n<tbody>\n${Str.repeat("<tr>\n<td>a</td>\n</tr>\n", 200000)}</tbody>\n</table>\n"
 }
+
+## --- links and images past the nesting cap -------------------------------------
+##
+## A link or an image counted as a leaf toward the emphasis cap, and scanning
+## a label recursed once per bracket, so 5000 nested images, or 5000 images
+## nested inside emphasis, overflowed the stack. Past the cap a bracket is text.
+## should_stop_nesting_images_at_the_cap
+expect
+    Test.html("${Str.repeat("![", 5000)}a${Str.repeat("](u)", 5000)}")
+    == "<p><img src=\"u\" alt=\"${Str.repeat("![", 4900)}a${Str.repeat("](u)", 4900)}\" /></p>\n"
+## An image is one level, so emphasis around it stops one level sooner.
+## should_count_an_image_toward_the_emphasis_cap
+expect
+    Test.html("${Str.repeat("*", 250)}![a](u)${Str.repeat("*", 250)}")
+    == "<p>${Str.repeat("*", 52)}${Str.repeat("<strong>", 99)}<img src=\"u\" alt=\"a\" />${Str.repeat("</strong>", 99)}${Str.repeat("*", 52)}</p>\n"
+## Images and emphasis alternate here. The scan stops 100 labels deep, so the
+## 4900 brackets inside that are text; the 50 images and 50 `<em>` around them
+## fill the cap, so the 50 brackets outside those are text too.
+## should_stop_nesting_images_inside_emphasis_at_the_cap
+expect
+    Test.html("${Str.repeat("![*", 5000)}a${Str.repeat("*](u)", 5000)}")
+    == "<p>${Str.repeat("![<em>![</em>", 25)}<img src=\"u\" alt=\"${Str.repeat("![", 4900)}a${Str.repeat("](u)", 4900)}\" />${Str.repeat("<em>](u)</em>](u)", 25)}</p>\n"

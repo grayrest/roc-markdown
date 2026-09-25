@@ -54,6 +54,10 @@ Scan := [].{
     ##  - `brackets`: the `]` closing each bracket a walk has passed, or that
     ##    none does (`Link.match_bracket`).
     ##
+    ## `nest` is how many link labels this scan is inside (`settle`). At
+    ## `Emph.max_depth` a bracket is text, which bounds the tree and the
+    ## scanner's own recursion into labels.
+    ##
     ## `tokens` learns `email_dead` itself; `angle` and `bracket` learn the
     ## other two and hand them back (`Learned`).
     Ctx : {
@@ -68,6 +72,7 @@ Scan := [].{
         cdata_end : U64,
         brackets : Link.Known,
         gts : List(U64),
+        nest : U64,
     }
 
     context : List(U8), Ref.Index, Link.Schemes -> Scan.Ctx
@@ -91,6 +96,7 @@ Scan := [].{
         } else {
             []
         },
+        nest: 0,
     }
 
     ## Every index of `c` in `b` from `i` on, appended to `acc` in order.
@@ -346,15 +352,24 @@ Scan := [].{
     ## splices them back as text. Scanning it up front and again on the way to
     ## a literal made nested brackets exponential — each level scanned its label
     ## twice, so `[[[…a](u)…](u)](u)` doubled in cost per level.
-    ##
+    bracket : Scan.Ctx, U64, U64, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
+    bracket = |ctx, i, skip, buf, out, image|
+        if ctx.nest >= Emph.max_depth {
+            ## As many labels deep as the tree may nest: this label is not
+            ## scanned, so neither the tree nor this recursion grows further.
+            Scan.learned(ctx, Scan.literal(ctx, i, skip, buf, out))
+        } else {
+            Scan.bracket_at(ctx, i, skip, buf, out, image)
+        }
+
     ## Nothing here reads `ctx` once `close_of` has it, and nothing reads the
     ## first walk's context once the second has it: everything comes from the
     ## context the last walk handed back. A context still held after it went
     ## into a walk shares its `brackets` with the walk, so every answer the
     ## walk recorded copied the whole dictionary — 40,000 `[a][b]` in one
     ## paragraph took eleven seconds under `roc test`.
-    bracket : Scan.Ctx, U64, U64, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
-    bracket = |ctx, i, skip, buf, out, image| {
+    bracket_at : Scan.Ctx, U64, U64, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
+    bracket_at = |ctx, i, skip, buf, out, image| {
         first = Scan.close_of(ctx, i + skip)
         fctx = first.ctx
         match first.close {
@@ -460,15 +475,29 @@ Scan := [].{
     ## label can still pair with one outside it.
     settle : Scan.Ctx, U64, U64, U64, U64, { dest : Str, title : Str, ok : Bool }, Scan.Buf, List(Emph.Tk), Bool -> Scan.Step
     settle = |ctx, i, skip, close, resume, parts, buf, out, image| {
-        label = Scan.tokens({ ..ctx, end: close }, i + skip, Scan.buf0(i + skip), [])
+        label = Scan.tokens({ ..ctx, end: close, nest: ctx.nest + 1 }, i + skip, Scan.buf0(i + skip), [])
         stop = Scan.tks_end(label, i + skip)
         if stop > close or (!image and Link.tks_have_link(label)) {
-            opener = Scan.push_all(buf, List.sublist(ctx.b, { start: i, len: skip }))
-            { i: stop, buf: Scan.buf0(stop), out: List.concat(Scan.flush(opener, i + skip, out), label) }
+            Scan.splice(ctx, i, skip, stop, label, buf, out)
         } else {
-            nodes = Link.link_node(i, resume, Emph.emphasis(label), parts, image, ctx.schemes)
-            { i: resume, buf: Scan.buf0(resume), out: List.concat(Scan.flush(buf, i, out), nodes) }
+            inner = Emph.emphasis(label)
+            ## The node would stand one level above its label's tallest, and
+            ## past the cap it is refused the way a link in a link is.
+            if Emph.height_all(inner) >= Emph.max_depth {
+                Scan.splice(ctx, i, skip, stop, label, buf, out)
+            } else {
+                nodes = Link.link_node(i, resume, inner, parts, image, ctx.schemes)
+                { i: resume, buf: Scan.buf0(resume), out: List.concat(Scan.flush(buf, i, out), nodes) }
+            }
         }
+    }
+
+    ## The bracket is text after all: its opener joins the pending text and
+    ## the label's tokens go back in, scanning on from where they end.
+    splice : Scan.Ctx, U64, U64, U64, List(Emph.Tk), Scan.Buf, List(Emph.Tk) -> Scan.Step
+    splice = |ctx, i, skip, stop, label, buf, out| {
+        opener = Scan.push_all(buf, List.sublist(ctx.b, { start: i, len: skip }))
+        { i: stop, buf: Scan.buf0(stop), out: List.concat(Scan.flush(opener, i + skip, out), label) }
     }
 
     ## Where a token list ends: every token ends where the next begins, so the
