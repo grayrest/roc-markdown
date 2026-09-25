@@ -111,6 +111,11 @@ expect SchemesTest.html_only(["https"], "see www.x.com now") == SchemesTest.text
 ## should_leave_a_bare_email_as_text_when_mailto_is_unlisted
 expect SchemesTest.html_only(["https"], "mail a@b.co now") == SchemesTest.text("mail a@b.co now")
 
+## A refused autolink is text to the bracket walk too, so a `]` the scanner
+## reads as inside a code span does not close the bracket.
+## should_close_a_bracket_the_way_the_scanner_reads_a_refused_autolink_under_only
+expect SchemesTest.html_only(["https"], "[<ftp:a`b> `]` ](u)") == SchemesTest.text("[&lt;ftp:a<code>b&gt; </code>]` ](u)")
+
 ## --- images: filtered only under Only ----------------------------------------
 ##
 ## `parse` leaves an image's `src` alone: a browser does not execute

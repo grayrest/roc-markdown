@@ -459,7 +459,7 @@ Scan := [].{
         match Dict.get(ctx.brackets, from) {
             Ok(known) => { close: known, ctx }
             Err(_) => {
-                walk = Link.match_bracket(ctx.b, from, { gt_end: ctx.gt_end, tick_last: ctx.tick_last, lasts: ctx.lasts }, ctx.brackets)
+                walk = Link.match_bracket(ctx.b, from, { gt_end: ctx.gt_end, tick_last: ctx.tick_last, lasts: ctx.lasts, schemes: ctx.schemes }, ctx.brackets)
                 { close: walk.close, ctx: { ..ctx, brackets: walk.known } }
             }
         }

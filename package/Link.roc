@@ -159,10 +159,11 @@ Link := [].{
         }
 
     ## What a bracket walk reads from the scan (`Scan.Ctx`): one past the last
-    ## `>` (`opaque_end`), the backtick table (`Bytes.tick_run_after`) and
-    ## the last terminators (`Tag.Lasts`). One record, so the walk does not
-    ## grow a parameter for every fact that answers a search in advance.
-    Ends : { gt_end : U64, tick_last : List(U64), lasts : Tag.Lasts }
+    ## `>` (`opaque_end`), the backtick table (`Bytes.tick_run_after`), the
+    ## last terminators (`Tag.Lasts`) and the href policy, which decides
+    ## whether `<…>` is an autolink. One record, so the walk does not grow a
+    ## parameter for every fact it reads.
+    Ends : { gt_end : U64, tick_last : List(U64), lasts : Tag.Lasts, schemes : Link.Schemes }
 
     ## What bracket walks have learned, by where a bracket's content starts:
     ## the `]` that closes it, or that none does.
@@ -261,28 +262,28 @@ Link := [].{
     ## a bracket inside it means.
     ##
     ## `<!` and `<?` go the way `Scan.special` takes them: an email address
-    ## first, then a comment, instruction, CDATA section or declaration
-    ## (`Tag.special_end`).
+    ## the href policy lets link, then a comment, instruction, CDATA section
+    ## or declaration (`Tag.special_end`).
     ##
-    ## A tag or autolink ends at the FIRST `>`, quotes or not. Before slicing
-    ## out and checking what lies between, the walk gives up at a `<` outside
-    ## quotes, for the reason `Tag.find_tag_end` gives — and it is the same
-    ## set of answers: a quote this pairs holds no `>`, since a `>` in it would
-    ## have been the first one. Without it, each `<` of `[` + `"<a" * 20_000` +
-    ## `>]` sliced and checked up to the `>` at the end.
+    ## Anything else goes the way `Scan.tag` takes it: its end is
+    ## `Tag.find_tag_end`'s, which skips a `>` inside a quoted value, and what
+    ## lies between must be what `Scan.tag` makes one node of (`is_opaque`).
+    ## The walk used to stop at the first `>` whatever the quotes, and to count
+    ## an autolink the policy refuses, so `[a <b c=">]"> d](u)` was not a link
+    ## and a refused `<javascript:…>` hid a `]` the scanner reads as text.
     opaque_end : List(U8), U64, Link.Ends -> Try(U64, [NotFound])
     opaque_end = |b, i, ends|
         if i + 1 >= ends.gt_end {
             Err(NotFound)
         } else if Bytes.at(b, i + 1) == 33 or Bytes.at(b, i + 1) == 63 {
             match Autolink.email_close(b, i + 1) {
-                Ok(gt) => Ok(gt)
-                Err(_) => Tag.special_end(b, i, ends.lasts).map_ok(|end| end - 1)
+                Ok(gt) if Link.allows(ends.schemes, "mailto:${Bytes.slice(b, i + 1, gt)}") => Ok(gt)
+                _ => Tag.special_end(b, i, ends.lasts).map_ok(|end| end - 1)
             }
         } else {
-            match Link.first_gt(b, { i: i + 1, quote: 0 }) {
+            match Tag.find_tag_end(b, i + 1) {
                 Ok(gt) =>
-                    if Link.is_opaque(Bytes.slice(b, i + 1, gt)) {
+                    if Link.is_opaque(Bytes.slice(b, i + 1, gt), ends.schemes) {
                         Ok(gt)
                     } else {
                         Err(NotFound)
@@ -291,41 +292,16 @@ Link := [].{
             }
         }
 
-    ## Where the `>` search stands: at `i`, inside the quote `quote` opened,
-    ## or outside any when it is 0.
-    GtWalk : { i : U64, quote : U8 }
-
-    ## The first `>` from `i` on, or `NotFound` at a `<` outside quotes.
-    ##
-    ## One loop that carries the open quote: a quote reader used to call back
-    ## into this at its closing quote, and that mutual recursion is not a
-    ## loop, so each quote pair cost a stack frame and about 350,000 of them
-    ## overflowed. The state is one record, destructured in the parameter
-    ## list, for the reason `Emph.emph_walk` gives.
-    first_gt : List(U8), Link.GtWalk -> Try(U64, [NotFound])
-    first_gt = |b, { i, quote }|
-        if i >= List.len(b) {
-            Err(NotFound)
-        } else {
-            c = Bytes.at(b, i)
-            if c == 62 {
-                Ok(i)
-            } else if quote != 0 {
-                Link.first_gt(b, { i: i + 1, quote: if c == quote { 0 } else { quote } })
-            } else if c == 60 {
-                Err(NotFound)
-            } else if c == 34 or c == 39 {
-                Link.first_gt(b, { i: i + 1, quote: c })
-            } else {
-                Link.first_gt(b, { i: i + 1, quote: 0 })
-            }
-        }
-
     ## A raw tag or an autolink is opaque to bracket matching, so
     ## `[foo <bar attr="](baz)">` does not close at the `]` sitting inside an
-    ## attribute value.
-    is_opaque : Str -> Bool
-    is_opaque = |inner| Tag.is_tag(inner) or Autolink.is_autolink(inner)
+    ## attribute value. The tests and their order are `Scan.tag`'s: an
+    ## autolink or an address counts only when the policy lets it link, and a
+    ## refused one falls through to being a tag, or to text.
+    is_opaque : Str, Link.Schemes -> Bool
+    is_opaque = |inner, schemes|
+        (Autolink.is_autolink(inner) and Link.allows(schemes, inner))
+        or (Autolink.is_email(inner) and Link.allows(schemes, "mailto:${inner}"))
+        or Tag.is_tag(inner)
 
     ## The `)` closing an inline link's destination and title, by counting
     ## parens. `depth` counts the destination's own `(`, so it starts at 1.

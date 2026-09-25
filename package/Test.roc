@@ -340,6 +340,17 @@ expect Test.html("[https://e.com](https://e.com)") == "<p><a href=\"https://e.co
 ## should_link_a_label_that_is_an_email_address
 expect Test.html("[a@b.com](https://x.org)") == "<p><a href=\"https://x.org\">a@b.com</a></p>\n"
 
+## --- brackets around `<…>` ---------------------------------------------------
+##
+## Where a label's `]` is depends on what `<…>` inside it is, so the bracket
+## walk has to read it exactly as the scanner does. It stopped at the first
+## `>` even inside a quoted value, and it stepped over an autolink the href
+## policy refuses, which the scanner reads as text.
+## should_link_a_label_holding_a_tag_with_a_quoted_bracket
+expect Test.html("[a <b c=\">]\"> d](u)") == "<p><a href=\"u\">a <!-- raw HTML omitted --> d</a></p>\n"
+## should_close_a_bracket_the_way_the_scanner_reads_a_refused_autolink
+expect Test.html("[<javascript:a`b> `]` ](u)") == "<p>[&lt;javascript:a<code>b&gt; </code>]` ](u)</p>\n"
+
 ## --- unmatched openers --------------------------------------------------------
 ##
 ## Each of these used to search to the end of the paragraph for a closer that
@@ -464,9 +475,9 @@ expect Test.html("a ${Str.repeat("<![CDATA[", 10000)}>") == "<p>a ${Str.repeat("
 expect Test.html("${Str.repeat("[a][b] ", 40000)}\n\n[b]: /u") == "<p>${Str.repeat("<a href=\"/u\">a</a> ", 39999)}<a href=\"/u\">a</a></p>\n"
 ## A label scan got the context as a copy with its own `end`, which left the
 ## caller's copy sharing the memo, so the label's first walk copied all of
-## it. A label walks where the scanner and the walk disagree, as they do
-## about a refused autolink: 80,000 `[<javascript:[y]>](u)` took fourteen
-## seconds.
+## it. A label walks where the scanner and the walk disagree, as they did
+## about a refused autolink until the walk learned the href policy: 80,000
+## `[<javascript:[y]>](u)` took fourteen seconds.
 ## should_link_eighty_thousand_labels_holding_a_refused_autolink
 expect
     Test.html(Str.repeat("[<javascript:[y]>](u) ", 80000))
