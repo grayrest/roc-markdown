@@ -1,13 +1,15 @@
 ## The HTML5 named character references, and the numeric ones.
 ##
-## GENERATED from https://html.spec.whatwg.org/entities.json — the 2125 names
-## that require a trailing semicolon. The legacy semicolon-less forms
-## (`&amp` without one) are deliberately absent: CommonMark requires the
+## Originally generated from https://html.spec.whatwg.org/entities.json — the
+## 2125 names that require a trailing semicolon. The legacy semicolon-less
+## forms (`&amp` without one) are deliberately absent: CommonMark requires the
 ## semicolon, and admitting the others would turn every `&copy` in prose into a
 ## character.
 ##
-## The table is a flat list searched linearly. That is O(table) per entity and
-## it does not matter — a document has a handful of entities
+## Both tables are kept SORTED by name, bytewise, and `lookup` bisects them.
+## Keep that order when editing one; `Test.roc` fails if it breaks. Searching
+## front to back cost the whole table per reference, and an unknown one
+## always paid it: 200,000 `&zzzzzz;` took six seconds.
 Ents := [].{
     Ent : { n : Str, c : Str }
 
@@ -85,10 +87,45 @@ Ents := [].{
         if name.starts_with("#") {
             Ents.numeric(name)
         } else {
-            match List.find_first(Ents.table, |e| e.n == name) {
-                Ok(e) => Ok(e.c)
+            entries = Ents.table
+            Ents.search(entries, Str.to_utf8(name), 0, List.len(entries))
+        }
+
+    ## The character named `key`, searched for in `entries[lo, hi)`, which is
+    ## sorted by name, bytewise.
+    search : List(Ents.Ent), List(U8), U64, U64 -> Try(Str, [NotFound])
+    search = |entries, key, lo, hi|
+        if lo >= hi {
+            Err(NotFound)
+        } else {
+            mid = lo + (hi - lo) // 2
+            match List.get(entries, mid) {
+                Ok(e) =>
+                    match Ents.compare(key, Str.to_utf8(e.n), 0) {
+                        Less => Ents.search(entries, key, lo, mid)
+                        Greater => Ents.search(entries, key, mid + 1, hi)
+                        Same => Ok(e.c)
+                    }
                 Err(_) => Err(NotFound)
             }
+        }
+
+    ## The bytewise order of `a` and `b`, which agree before index `i`. A
+    ## prefix sorts first.
+    compare : List(U8), List(U8), U64 -> [Less, Same, Greater]
+    compare = |a, b, i|
+        match (List.get(a, i), List.get(b, i)) {
+            (Ok(x), Ok(y)) =>
+                if x < y {
+                    Less
+                } else if x > y {
+                    Greater
+                } else {
+                    Ents.compare(a, b, i + 1)
+                }
+            (Err(_), Ok(_)) => Less
+            (Ok(_), Err(_)) => Greater
+            (Err(_), Err(_)) => Same
         }
 
     ## `&#35;` and `&#x22;`. A zero codepoint is U+FFFD, not a NUL — the spec
@@ -206,16 +243,19 @@ Ents := [].{
     ##
     ## Numeric references are unaffected in both profiles: `&#42;` is decoded by
     ## `numeric`, which is code and carries no table.
+    ##
+    ## Sorted by name, bytewise, like `full`.
     minimal : List(Ents.Ent)
     minimal = [
         { n: "amp", c: "&" },
-        { n: "lt", c: "<" },
-        { n: "gt", c: ">" },
-        { n: "quot", c: "\"" },
         { n: "apos", c: "'" },
+        { n: "gt", c: ">" },
+        { n: "lt", c: "<" },
+        { n: "quot", c: "\"" },
     ]
 
-    ## Every HTML5 named character reference that requires a semicolon.
+    ## Every HTML5 named character reference that requires a semicolon, sorted
+    ## by name, bytewise.
     full : List(Ents.Ent)
     full = [
         { n: "AElig", c: "Æ" },
@@ -1175,9 +1215,9 @@ Ents := [].{
         { n: "empty", c: "∅" },
         { n: "emptyset", c: "∅" },
         { n: "emptyv", c: "∅" },
+        { n: "emsp", c: " " },
         { n: "emsp13", c: " " },
         { n: "emsp14", c: " " },
-        { n: "emsp", c: " " },
         { n: "eng", c: "ŋ" },
         { n: "ensp", c: " " },
         { n: "eogon", c: "ę" },
@@ -2109,10 +2149,10 @@ Ents := [].{
         { n: "succsim", c: "≿" },
         { n: "sum", c: "∑" },
         { n: "sung", c: "♪" },
+        { n: "sup", c: "⊃" },
         { n: "sup1", c: "¹" },
         { n: "sup2", c: "²" },
         { n: "sup3", c: "³" },
-        { n: "sup", c: "⊃" },
         { n: "supE", c: "⫆" },
         { n: "supdot", c: "⪾" },
         { n: "supdsub", c: "⫘" },

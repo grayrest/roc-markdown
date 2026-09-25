@@ -14,6 +14,7 @@ import Markdown
 import Scan
 import Html
 import Loc
+import Ents
 
 Test := [].{
     ## Blocks rendered as a compact shape string, so an assertion reads as the
@@ -286,6 +287,26 @@ expect Test.shape("| a |\n|---|\nx | y") == "T1(a,x)"
 expect Test.html("&#99999999999999999999;") == "<p>&amp;#99999999999999999999;</p>\n"
 ## should_render_an_overlong_hex_reference_as_text
 expect Test.html("&#x123456789ABCDEF01;") == "<p>&amp;#x123456789ABCDEF01;</p>\n"
+
+## --- the entity tables are sorted ---------------------------------------------
+##
+## `Ents.lookup` bisects the tables, so a name out of order is a name it may
+## never find, and nothing else would notice.
+## should_keep_both_entity_tables_sorted_by_name
+expect {
+    is_sorted = |table| {
+        names = List.map(table, |e| Str.to_utf8(e.n))
+        List.all(
+            List.map_with_index(List.drop_first(names, 1), |name, k| Ents.compare(List.get(names, k).ok_or([]), name, 0) == Less),
+            |in_order| in_order,
+        )
+    }
+    is_sorted(Ents.full) and is_sorted(Ents.minimal)
+}
+## The first and last names of the full table, where a bisection is most
+## likely to be off by one.
+## should_decode_the_first_and_last_entity_names
+expect Test.html("&AElig; &zwnj;") == "<p>Æ \u(200C)</p>\n"
 
 ## --- a long run of hashes ------------------------------------------------------
 ##
