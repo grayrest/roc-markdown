@@ -385,6 +385,17 @@ expect Test.html(Str.repeat("*a* ", 20000)) == "<p>${Str.repeat("<em>a</em> ", 1
 expect Test.outline(Str.repeat("> ", 2000)) == "${Str.repeat("Q(", 100)}P${Str.repeat(")", 100)}"
 ## should_stop_nesting_lists_at_the_cap
 expect Test.outline("${Str.repeat("- ", 2000)}a") == "${Str.repeat("L(", 50)}P${Str.repeat(")", 50)}"
+## A sibling item opens an entry, not a list, so it fits at exactly the cap.
+## It was charged for a list, refused, and each later item became a list of
+## its own.
+## should_keep_sibling_items_in_one_list_at_the_cap
+expect {
+    nested = Str.join_with(List.map_with_index(List.repeat(0, 50), |_, k| "${Str.repeat("  ", k)}- a${k.to_str()}"), "\n")
+    deep = Str.repeat("  ", 49)
+    Test.html("${nested}\n${deep}- b\n${deep}- c").contains("<li>a49</li>\n<li>b</li>\n<li>c</li>\n</ul>")
+}
+## should_keep_sibling_items_in_one_list_inside_ninety_eight_quotes
+expect Test.html("${Str.repeat("> ", 98)}- a\n${Str.repeat("> ", 98)}- b").contains("<li>a</li>\n<li>b</li>")
 ## should_stop_nesting_emphasis_at_the_cap
 expect
     Test.html("${Str.repeat("*", 20000)}a${Str.repeat("*", 20000)}")

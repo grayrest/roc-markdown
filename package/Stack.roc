@@ -348,7 +348,7 @@ Stack := [].{
                     )
                 Err(_) => Stack.push_para(st, rest, lo)
             }
-        } else if ind < 4 and Stack.is_marker(rest, !para_open) and Stack.has_room(st, Stack.list_cost) {
+        } else if ind < 4 and Stack.is_marker(rest, !para_open) and Stack.has_room(st, Stack.entry_cost(st, rest)) {
             Stack.open_entry(st, rest, lo)
         } else if Stack.rows_open(top.kind) or (ind < 4 and t.starts_with("|")) {
             Stack.push_rows(st, rest, lo)
@@ -366,7 +366,38 @@ Stack := [].{
         Lex.indent(rest, 0) < 4
         and !Lex.is_rule(rest.trim())
         and Stack.is_marker(rest, !para_open)
-        and Stack.has_room(st, Stack.list_cost)
+        and Stack.has_room(st, Stack.entry_cost(st, rest))
+    }
+
+    ## How many containers the marker in `rest` opens: an entry alone when it
+    ## continues the list it would find at the tip (a sibling, as
+    ## `open_entry_at` decides), a list and its entry otherwise. Charging a
+    ## sibling for a new list refused it at exactly the cap, so each later
+    ## item there opened a list of its own.
+    entry_cost : List(Stack.Open), Str -> U64
+    entry_cost = |st, rest| {
+        ordered = match Lex.marker_here(rest, True) {
+            Numbered(_, _, _) => True
+            _ => False
+        }
+        if Stack.list_matches(Stack.kind_past_leaf(st), ordered, Lex.marker_char(rest.trim())) {
+            1
+        } else {
+            Stack.list_cost
+        }
+    }
+
+    ## The tip's kind, or the kind under it when the tip is a leaf that a new
+    ## container would close first.
+    kind_past_leaf : List(Stack.Open) -> Stack.Kind
+    kind_past_leaf = |st| {
+        top = Stack.tip(st)
+        n = List.len(st)
+        if Stack.is_leaf(top.kind) and n >= 2 {
+            Stack.kind_at(st, n - 2)
+        } else {
+            top.kind
+        }
     }
 
     ## How many containers may be open at once. Past it, a `>` or a list
@@ -386,10 +417,10 @@ Stack := [].{
     ## Can `n` more containers open here? Counted without the root and without
     ## an open leaf, which the new container would close.
     ##
-    ## `marker_ahead` asks this too, and must: a marker refused here but
-    ## counted as a sibling there would keep a dangling list open, and the
-    ## paragraph it becomes would land in the list's `kids`, which nothing
-    ## reads.
+    ## `marker_ahead` asks this too, with the same `entry_cost`, and must: a
+    ## marker refused here but counted as a sibling there would keep a
+    ## dangling list open, and the paragraph it becomes would land in the
+    ## list's `kids`, which nothing reads.
     has_room : List(Stack.Open), U64 -> Bool
     has_room = |st, n| {
         leaf = if Stack.is_leaf(Stack.tip(st).kind) {
