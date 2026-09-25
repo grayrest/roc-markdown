@@ -223,7 +223,11 @@ Link := [].{
                 }
             } else if c == 93 {
                 match List.last(open) {
-                    Ok(inner) => Link.bracket_walk(b, i + 1, List.drop_last(open, 1), ends, Dict.insert(known, inner, Ok(i)))
+                    ## `drop_at`, not `drop_last`, for the reason
+                    ## `Stack.take_tip` gives: a slice left behind made the
+                    ## next `[` copy the whole stack, and nested full
+                    ## references were quadratic.
+                    Ok(inner) => Link.bracket_walk(b, i + 1, List.drop_at(open, List.len(open) - 1), ends, Dict.insert(known, inner, Ok(i)))
                     Err(_) => { close: Ok(i), known }
                 }
             } else {
@@ -235,8 +239,21 @@ Link := [].{
     unclosed : List(U64), Link.Known -> { close : Try(U64, [NotFound]), known : Link.Known }
     unclosed = |open, known| {
         close: Err(NotFound),
-        known: List.fold(open, known, |k, o| Dict.insert(k, o, Err(NotFound))),
+        known: Link.mark_unclosed(open, 0, known),
     }
+
+    ## Records that every bracket in `open` from index `k` on never closes.
+    ##
+    ## A loop, not `List.fold`: in an optimized build a fold whose `Dict`
+    ## accumulator starts as a parameter copied the dictionary on every
+    ## insert, so `[` * 80,000 + `]` took five seconds. `roc test` does not
+    ## show it.
+    mark_unclosed : List(U64), U64, Link.Known -> Link.Known
+    mark_unclosed = |open, k, known|
+        match List.get(open, k) {
+            Ok(o) => Link.mark_unclosed(open, k + 1, Dict.insert(known, o, Err(NotFound)))
+            Err(_) => known
+        }
 
     ## Where the markup opened by the `<` at `i` ends, for bracket matching,
     ## which treats it as opaque (`match_bracket`), or `NotFound` when `<`

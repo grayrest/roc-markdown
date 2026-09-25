@@ -409,6 +409,15 @@ expect {
 expect Test.html("${Str.repeat("<a", 20000)}>") == "<p>${Str.repeat("&lt;a", 19999)}<!-- raw HTML omitted --></p>\n"
 ## should_scan_thirty_thousand_bracket_openers_before_one_closer
 expect Test.html("${Str.repeat("[", 30000)}]") == "<p>${Str.repeat("[", 30000)}]</p>\n"
+## A walk popped its stack of open brackets to a slice, and the next `[`
+## pushed onto the slice copied the whole stack, so a walk through nested
+## full references was quadratic: 100,000 took five seconds. Marking the
+## openers left unclosed was quadratic too, but only in an optimized build,
+## which this cannot pin.
+## should_walk_a_hundred_thousand_nested_full_references
+expect
+    Test.html("${Str.repeat("[", 100000)}a${Str.repeat("][x]", 100000)}")
+    == "<p>${Str.repeat("[", 100000)}a${Str.repeat("][x]", 100000)}</p>\n"
 ## should_scan_a_label_of_twenty_thousand_tag_openers
 expect Test.html("[${Str.repeat("<a", 20000)}>]") == "<p>[${Str.repeat("&lt;a", 19999)}<!-- raw HTML omitted -->]</p>\n"
 ## should_scan_ten_thousand_cdata_openers_before_one_closer
