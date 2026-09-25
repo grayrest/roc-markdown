@@ -104,4 +104,16 @@ Bytes := [].{
 
     is_alpha : U8 -> Bool
     is_alpha = |c| (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+
+    ## Is there a run of exactly `n` backticks starting at or after `from`?
+    ## `tick_last` is the scanner's table (`Scan.Ctx`): for each run length
+    ## `n`, one past where the last run of exactly `n` starts, at index
+    ## `n - 1`, and 0 for none. A run can start at or after `from` exactly
+    ## when the last one does.
+    tick_run_after : List(U64), U64, U64 -> Bool
+    tick_run_after = |tick_last, from, n|
+        match List.get(tick_last, n - 1) {
+            Ok(last) => last > from
+            Err(_) => False
+        }
 }

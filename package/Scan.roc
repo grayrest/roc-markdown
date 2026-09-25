@@ -113,11 +113,7 @@ Scan := [].{
 
     ## Is there a run of exactly `n` backticks starting at or after `from`?
     tick_run_after : Scan.Ctx, U64, U64 -> Bool
-    tick_run_after = |ctx, from, n|
-        match List.get(ctx.tick_last, n - 1) {
-            Ok(last) => last > from
-            Err(_) => False
-        }
+    tick_run_after = |ctx, from, n| Bytes.tick_run_after(ctx.tick_last, from, n)
 
     ## The pending literal text, carrying the SOURCE offset it began at (T0b).
     ## The offset rides WITH the buffer so a finished `Text` node knows its
@@ -410,7 +406,7 @@ Scan := [].{
         match Dict.get(ctx.brackets, from) {
             Ok(known) => { close: known, ctx }
             Err(_) => {
-                walk = Link.match_bracket(ctx.b, from, ctx.gt_end, ctx.brackets)
+                walk = Link.match_bracket(ctx.b, from, ctx.gt_end, ctx.tick_last, ctx.brackets)
                 { close: walk.close, ctx: { ..ctx, brackets: walk.known } }
             }
         }

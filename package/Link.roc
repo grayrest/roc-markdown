@@ -172,51 +172,59 @@ Link := [].{
     ## every `[` to the `]` at the end. A `[` whose answer is already known is
     ## stepped over, or ends the walk when nothing closes it.
     ##
-    ## `gt_end` is one past the last `>` in `b` (`opaque_end`).
-    match_bracket : List(U8), U64, U64, Link.Known -> { close : Try(U64, [NotFound]), known : Link.Known }
-    match_bracket = |b, from, gt_end, known| {
-        walk = Link.bracket_walk(b, from, [], gt_end, known)
+    ## `gt_end` is one past the last `>` in `b` (`opaque_end`), and
+    ## `tick_last` is the scanner's backtick table (`Bytes.tick_run_after`).
+    match_bracket : List(U8), U64, U64, List(U64), Link.Known -> { close : Try(U64, [NotFound]), known : Link.Known }
+    match_bracket = |b, from, gt_end, tick_last, known| {
+        walk = Link.bracket_walk(b, from, [], gt_end, tick_last, known)
         { close: walk.close, known: Dict.insert(walk.known, from, walk.close) }
     }
 
     ## `open` holds the content start of every `[` passed and not yet closed,
     ## innermost last.
-    bracket_walk : List(U8), U64, List(U64), U64, Link.Known -> { close : Try(U64, [NotFound]), known : Link.Known }
-    bracket_walk = |b, i, open, gt_end, known|
+    bracket_walk : List(U8), U64, List(U64), U64, List(U64), Link.Known -> { close : Try(U64, [NotFound]), known : Link.Known }
+    bracket_walk = |b, i, open, gt_end, tick_last, known|
         if i >= List.len(b) {
             Link.unclosed(open, known)
         } else {
             c = Bytes.at(b, i)
             if c == 92 {
-                Link.bracket_walk(b, i + 2, open, gt_end, known)
+                Link.bracket_walk(b, i + 2, open, gt_end, tick_last, known)
             } else if c == 96 {
                 ## A code span outranks a bracket, so its contents are opaque —
                 ## `[foo`](/uri)`` is a bracket followed by code, not a link.
+                ## The table answers "no closing run" without the search that
+                ## would run to the end of the text to find none.
                 n = Bytes.run_len(b, i, 96, 0)
-                match Bytes.find_run(b, i + n, 96, n) {
-                    Ok(close) => Link.bracket_walk(b, close + n, open, gt_end, known)
-                    Err(_) => Link.bracket_walk(b, i + n, open, gt_end, known)
+                found = if Bytes.tick_run_after(tick_last, i + n, n) {
+                    Bytes.find_run(b, i + n, 96, n)
+                } else {
+                    Err(NotFound)
+                }
+                match found {
+                    Ok(close) => Link.bracket_walk(b, close + n, open, gt_end, tick_last, known)
+                    Err(_) => Link.bracket_walk(b, i + n, open, gt_end, tick_last, known)
                 }
             } else if c == 60 {
                 match Link.opaque_end(b, i, gt_end) {
-                    Ok(gt) => Link.bracket_walk(b, gt + 1, open, gt_end, known)
-                    Err(_) => Link.bracket_walk(b, i + 1, open, gt_end, known)
+                    Ok(gt) => Link.bracket_walk(b, gt + 1, open, gt_end, tick_last, known)
+                    Err(_) => Link.bracket_walk(b, i + 1, open, gt_end, tick_last, known)
                 }
             } else if c == 91 {
                 match Dict.get(known, i + 1) {
-                    Ok(Ok(close)) => Link.bracket_walk(b, close + 1, open, gt_end, known)
+                    Ok(Ok(close)) => Link.bracket_walk(b, close + 1, open, gt_end, tick_last, known)
                     ## This `[` never closes, and every bracket around it
                     ## would have to close after it did.
                     Ok(Err(_)) => Link.unclosed(open, known)
-                    Err(_) => Link.bracket_walk(b, i + 1, List.append(open, i + 1), gt_end, known)
+                    Err(_) => Link.bracket_walk(b, i + 1, List.append(open, i + 1), gt_end, tick_last, known)
                 }
             } else if c == 93 {
                 match List.last(open) {
-                    Ok(inner) => Link.bracket_walk(b, i + 1, List.drop_last(open, 1), gt_end, Dict.insert(known, inner, Ok(i)))
+                    Ok(inner) => Link.bracket_walk(b, i + 1, List.drop_last(open, 1), gt_end, tick_last, Dict.insert(known, inner, Ok(i)))
                     Err(_) => { close: Ok(i), known }
                 }
             } else {
-                Link.bracket_walk(b, i + 1, open, gt_end, known)
+                Link.bracket_walk(b, i + 1, open, gt_end, tick_last, known)
             }
         }
 

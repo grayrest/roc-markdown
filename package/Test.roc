@@ -414,3 +414,15 @@ expect Test.html("a ${Str.repeat("<![CDATA[", 10000)}>") == "<p>a ${Str.repeat("
 ## recorded copied the whole memo: 40,000 `[a][b]` took eleven seconds.
 ## should_resolve_forty_thousand_full_references_in_one_paragraph
 expect Test.html("${Str.repeat("[a][b] ", 40000)}\n\n[b]: /u") == "<p>${Str.repeat("<a href=\"/u\">a</a> ", 39999)}<a href=\"/u\">a</a></p>\n"
+
+## --- backtick runs inside a bracket --------------------------------------------
+##
+## A bracket walk steps over a code span, and it searched to the end of the text
+## for the closing run of every opening one, even where the scan's own table
+## already said no run of that length follows: a label holding runs of every
+## length up to 1400 (about 1 MB) took seventeen seconds.
+## should_walk_a_label_of_fourteen_hundred_unclosed_backtick_runs
+expect {
+    runs = Str.join_with(List.map_with_index(List.repeat(0, 1400), |_, k| "${Str.repeat("`", k + 1)}a"), "")
+    Test.html("[${runs}]") == "<p>[${runs}]</p>\n"
+}
