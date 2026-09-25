@@ -329,35 +329,46 @@ Scan := [].{
     ## splices them back as text. Scanning it up front and again on the way to
     ## a literal made nested brackets exponential — each level scanned its label
     ## twice, so `[[[…a](u)…](u)](u)` doubled in cost per level.
+    ##
+    ## Nothing here reads `ctx` once `close_of` has it, and nothing reads the
+    ## first walk's context once the second has it: everything comes from the
+    ## context the last walk handed back. A context still held after it went
+    ## into a walk shares its `brackets` with the walk, so every answer the
+    ## walk recorded copied the whole dictionary — 40,000 `[a][b]` in one
+    ## paragraph took eleven seconds under `roc test`.
     bracket : Scan.Ctx, U64, U64, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
     bracket = |ctx, i, skip, buf, out, image| {
         first = Scan.close_of(ctx, i + skip)
+        fctx = first.ctx
         match first.close {
             Ok(close) =>
-                if Bytes.at(ctx.b, close + 1) == 91 {
+                if Bytes.at(fctx.b, close + 1) == 91 {
                     ## `[text][label]` and `[label][]` — a REFERENCE. An empty
                     ## second bracket means "use the first as the label", which
                     ## is why this cannot just read the second one.
-                    second = Scan.close_of(first.ctx, close + 2)
-                    Scan.learned(
-                        second.ctx,
-                        match second.close {
-                            Ok(rclose) => {
-                                written = Bytes.slice(ctx.b, close + 2, rclose)
-                                key = if Str.is_empty(written) {
-                                    Bytes.slice(ctx.b, i + skip, close)
-                                } else {
-                                    written
-                                }
-                                Scan.resolve(second.ctx, i, skip, close, rclose + 1, key, buf, out, image)
+                    second = Scan.close_of(fctx, close + 2)
+                    sctx = second.ctx
+                    step = match second.close {
+                        Ok(rclose) => {
+                            written = Bytes.slice(sctx.b, close + 2, rclose)
+                            key = if Str.is_empty(written) {
+                                Bytes.slice(sctx.b, i + skip, close)
+                            } else {
+                                written
                             }
-                            Err(_) => Scan.literal(ctx, i, skip, buf, out)
-                        },
-                    )
+                            Scan.resolve(sctx, i, skip, close, rclose + 1, key, buf, out, image)
+                        }
+                        Err(_) => Scan.literal(sctx, i, skip, buf, out)
+                    }
+                    Scan.learned(sctx, step)
                 } else {
-                    Scan.learned(first.ctx, Scan.inline_or_shortcut(first.ctx, i, skip, close, buf, out, image))
+                    step = Scan.inline_or_shortcut(fctx, i, skip, close, buf, out, image)
+                    Scan.learned(fctx, step)
                 }
-            Err(_) => Scan.learned(first.ctx, Scan.literal(ctx, i, skip, buf, out))
+            Err(_) => {
+                step = Scan.literal(fctx, i, skip, buf, out)
+                Scan.learned(fctx, step)
+            }
         }
     }
 

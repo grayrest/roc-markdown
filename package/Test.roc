@@ -406,3 +406,11 @@ expect Test.html("${Str.repeat("[", 30000)}]") == "<p>${Str.repeat("[", 30000)}]
 expect Test.html("[${Str.repeat("<a", 20000)}>]") == "<p>[${Str.repeat("&lt;a", 19999)}<!-- raw HTML omitted -->]</p>\n"
 ## should_scan_ten_thousand_cdata_openers_before_one_closer
 expect Test.html("a ${Str.repeat("<![CDATA[", 10000)}>") == "<p>a ${Str.repeat("&lt;![CDATA[", 10000)}&gt;</p>\n"
+
+## --- many brackets in one paragraph ----------------------------------------------
+##
+## The scanner kept its context after handing it to a bracket walk, so the
+## walk's memo of where each bracket closes was shared, and every answer it
+## recorded copied the whole memo: 40,000 `[a][b]` took eleven seconds.
+## should_resolve_forty_thousand_full_references_in_one_paragraph
+expect Test.html("${Str.repeat("[a][b] ", 40000)}\n\n[b]: /u") == "<p>${Str.repeat("<a href=\"/u\">a</a> ", 39999)}<a href=\"/u\">a</a></p>\n"
