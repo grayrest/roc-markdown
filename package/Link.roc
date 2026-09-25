@@ -307,31 +307,67 @@ Link := [].{
     is_opaque : Str -> Bool
     is_opaque = |inner| Tag.is_tag(inner) or Autolink.is_autolink(inner)
 
-    match_paren : List(U8), U64, U64 -> Try(U64, [NotFound])
-    match_paren = |b, i, depth|
+    ## The `)` closing an inline link's destination and title, by counting
+    ## parens. `depth` counts the destination's own `(`, so it starts at 1.
+    ##
+    ## Two things keep one call from walking the rest of the paragraph, which
+    ## made a paragraph of `[a](` quadratic: nesting stops at
+    ## `max_paren_depth`, and the `<` jump finds its `>` in `gts`, the
+    ## ascending offsets of every `>` (`Scan.Ctx`), by binary search. Searching
+    ## the bytes ran to the end when no `>` followed, and to the same far `>`
+    ## for every `<` when one did.
+    match_paren : List(U8), U64, U64, List(U64) -> Try(U64, [NotFound])
+    match_paren = |b, i, depth, gts|
         if i >= List.len(b) {
             Err(NotFound)
         } else {
             c = Bytes.at(b, i)
             if c == 92 {
-                Link.match_paren(b, i + 2, depth)
+                Link.match_paren(b, i + 2, depth, gts)
             } else if c == 60 {
                 ## An angle-bracketed destination is opaque: `(<b)c>)` closes at
                 ## the LAST paren, not the one inside the brackets.
-                match Bytes.find_byte(b, i + 1, 62) {
-                    Ok(gt) => Link.match_paren(b, gt + 1, depth)
-                    Err(_) => Link.match_paren(b, i + 1, depth)
+                match Link.first_at_or_after(gts, i + 1, 0, List.len(gts)) {
+                    Ok(gt) => Link.match_paren(b, gt + 1, depth, gts)
+                    Err(_) => Link.match_paren(b, i + 1, depth, gts)
                 }
             } else if c == 40 {
-                Link.match_paren(b, i + 1, depth + 1)
+                if depth > Link.max_paren_depth {
+                    Err(NotFound)
+                } else {
+                    Link.match_paren(b, i + 1, depth + 1, gts)
+                }
             } else if c == 41 {
                 if depth == 1 {
                     Ok(i)
                 } else {
-                    Link.match_paren(b, i + 1, depth - 1)
+                    Link.match_paren(b, i + 1, depth - 1, gts)
                 }
             } else {
-                Link.match_paren(b, i + 1, depth)
+                Link.match_paren(b, i + 1, depth, gts)
+            }
+        }
+
+    ## How many parens may nest inside a destination's own. The spec lets an
+    ## implementation cap it ("at least three levels"), and 32 is cmark's cap:
+    ## one more and the parens never balance, so the bracket is not a link.
+    max_paren_depth : U64
+    max_paren_depth = 32
+
+    ## The first entry of the ascending `xs` at or above `p`, searched for in
+    ## `[lo, hi)`: the answer's index is always in `[lo, hi]`, and `hi` at the
+    ## end of `xs` means there is none.
+    first_at_or_after : List(U64), U64, U64, U64 -> Try(U64, [NotFound])
+    first_at_or_after = |xs, p, lo, hi|
+        if lo >= hi {
+            List.get(xs, lo).map_err(|_| NotFound)
+        } else {
+            mid = lo + (hi - lo) // 2
+            ## `mid` is below `hi`, so the fallback is never read.
+            if List.get(xs, mid).ok_or(p) >= p {
+                Link.first_at_or_after(xs, p, lo, mid)
+            } else {
+                Link.first_at_or_after(xs, p, mid + 1, hi)
             }
         }
 

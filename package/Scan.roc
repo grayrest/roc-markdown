@@ -38,6 +38,10 @@ Scan := [].{
     ##  - `tick_last`: for each backtick run length `n`, one past where the last
     ##    run of exactly `n` starts (index `n - 1`, 0 for none). A code span
     ##    opened at or beyond it cannot close.
+    ##  - `gts`: every `>`, ascending, for the `<` jump in an inline link's
+    ##    destination (`Link.match_paren`), which finds its `>` by binary
+    ##    search. Built only when the text has both a `(` and a `<`, since a
+    ##    destination needs the one and the jump the other; empty otherwise.
     ##
     ## A closer that DOES exist is no help to those, so the rest are learned
     ## during the scan, from searches that have already run:
@@ -63,6 +67,7 @@ Scan := [].{
         email_dead : U64,
         cdata_end : U64,
         brackets : Link.Known,
+        gts : List(U64),
     }
 
     context : List(U8), Ref.Index, Link.Schemes -> Scan.Ctx
@@ -81,7 +86,23 @@ Scan := [].{
         email_dead: 0,
         cdata_end: List.len(b),
         brackets: Dict.empty(),
+        gts: if List.contains(b, 40) and List.contains(b, 60) {
+            Scan.positions(b, 62, 0, [])
+        } else {
+            []
+        },
     }
+
+    ## Every index of `c` in `b` from `i` on, appended to `acc` in order.
+    positions : List(U8), U8, U64, List(U64) -> List(U64)
+    positions = |b, c, i, acc|
+        if i >= List.len(b) {
+            acc
+        } else if Bytes.at(b, i) == c {
+            Scan.positions(b, c, i + 1, List.append(acc, i))
+        } else {
+            Scan.positions(b, c, i + 1, acc)
+        }
 
     ## One past the last `c` before `i`, or 0 when there is none.
     end_of_last : List(U8), U64, U8 -> U64
@@ -378,7 +399,7 @@ Scan := [].{
             ## keeps `[not a link]` readable.
             Scan.resolve(ctx, i, skip, close, close + 1, Bytes.slice(ctx.b, i + skip, close), buf, out, image)
         } else {
-            match Link.match_paren(ctx.b, close + 2, 1) {
+            match Link.match_paren(ctx.b, close + 2, 1, ctx.gts) {
                 Ok(pclose) => {
                     parts = Link.dest_title(Bytes.slice(ctx.b, close + 2, pclose))
                     if parts.ok {

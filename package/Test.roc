@@ -426,3 +426,26 @@ expect {
     runs = Str.join_with(List.map_with_index(List.repeat(0, 1400), |_, k| "${Str.repeat("`", k + 1)}a"), "")
     Test.html("[${runs}]") == "<p>[${runs}]</p>\n"
 }
+
+## --- inline link destinations --------------------------------------------------
+##
+## The `)` closing a destination is found by counting parens, and each `<` jumps
+## to the `>` that ends an angle-bracketed destination. The jump searched to the
+## end of the text when no `>` followed, and to the same far `>` for every `<`
+## when one did; and with no cap on the count, every `[a](` in a paragraph of
+## them walked to its end one level deeper. Each took seventeen to thirty
+## seconds.
+## should_scan_sixty_thousand_angle_openers_in_a_destination
+expect Test.html("[a](${Str.repeat("<", 60000)}") == "<p>[a](${Str.repeat("&lt;", 60000)}</p>\n"
+## should_scan_twenty_thousand_unclosed_inline_links
+expect Test.html(Str.repeat("[a](", 20000)) == "<p>${Str.repeat("[a](", 20000)}</p>\n"
+## should_scan_twenty_thousand_unclosed_angle_destinations_before_one_closer
+expect Test.html("${Str.repeat("[a](<", 20000)}>") == "<p>${Str.repeat("[a](&lt;", 20000)}&gt;</p>\n"
+## Parens nest 32 deep inside a destination, as in cmark; the spec asks for at
+## least three. One more and the parens never balance, so it is not a link.
+## should_link_thirty_two_nested_parens_but_not_thirty_three
+expect {
+    nested = |n| "${Str.repeat("(", n)}u${Str.repeat(")", n)}"
+    Test.html("[a](${nested(32)})") == "<p><a href=\"${nested(32)}\">a</a></p>\n"
+    and Test.html("[a](${nested(33)})") == "<p>[a](${nested(33)})</p>\n"
+}
