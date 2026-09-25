@@ -431,6 +431,34 @@ expect
     Test.html(Str.repeat("[<javascript:[y]>](u) ", 80000))
     == "<p>${Str.repeat("<a href=\"u\">&lt;javascript:[y]&gt;</a> ", 79999)}<a href=\"u\">&lt;javascript:[y]&gt;</a></p>\n"
 
+## --- how long a link label may be ----------------------------------------------
+##
+## A label holds at most 999 characters. Without the limit every `[` of
+## nested brackets was a shortcut candidate whose whole label was sliced and
+## folded, so 15,000 of them took ten seconds.
+## should_scan_fifteen_thousand_nested_brackets
+expect
+    Test.html("${Str.repeat("[", 15000)}a${Str.repeat("]", 15000)}")
+    == "<p>${Str.repeat("[", 15000)}a${Str.repeat("]", 15000)}</p>\n"
+## One character over, neither the reference nor the definition is one.
+## should_leave_a_thousand_character_shortcut_reference_as_text
+expect
+    Test.html("[${Str.repeat("a", 1000)}]\n\n[${Str.repeat("a", 1000)}]: /u")
+    == "<p>[${Str.repeat("a", 1000)}]</p>\n<p>[${Str.repeat("a", 1000)}]: /u</p>\n"
+## should_leave_a_full_reference_with_a_thousand_character_label_as_text
+expect
+    Test.html("[x][${Str.repeat("a", 1000)}]\n\n[${Str.repeat("a", 1000)}]: /u")
+    == "<p>[x][${Str.repeat("a", 1000)}]</p>\n<p>[${Str.repeat("a", 1000)}]: /u</p>\n"
+## should_link_a_label_of_nine_hundred_ninety_nine_characters
+expect
+    Test.html("[${Str.repeat("a", 999)}]\n\n[${Str.repeat("a", 999)}]: /u")
+    == "<p><a href=\"/u\">${Str.repeat("a", 999)}</a></p>\n"
+## Characters, not bytes: 999 `é` are 1998 bytes and still a label.
+## should_count_a_label_in_characters_not_bytes
+expect
+    Test.html("[${Str.repeat("é", 999)}]\n\n[${Str.repeat("é", 999)}]: /u")
+    == "<p><a href=\"/u\">${Str.repeat("é", 999)}</a></p>\n"
+
 ## --- backtick runs inside a bracket --------------------------------------------
 ##
 ## A bracket walk steps over a code span, and it searched to the end of the text

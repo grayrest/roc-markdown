@@ -55,7 +55,9 @@ Defs := [].{
         } else {
             start = pos + Lex.indent(line, 0)
             match Defs.find_label_end(b, start + 1) {
-                Ok(close) => {
+                ## A label longer than a label may be defines nothing, as no
+                ## reference could use it.
+                Ok(close) if Link.label_fits(b, start + 1, close) => {
                     label = Bytes.slice(b, start + 1, close)
                     after = Defs.skip_ws(b, close + 2)
                     parts = Defs.dest_at(b, after)
@@ -106,7 +108,7 @@ Defs := [].{
                         }
                     }
                 }
-                Err(_) => Err(NotDef)
+                _ => Err(NotDef)
             }
         }
     }

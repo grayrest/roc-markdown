@@ -374,6 +374,34 @@ Link := [].{
             }
         }
 
+    ## CommonMark §6.3: a link label holds at most 999 characters between
+    ## its brackets. The limit is also what keeps nested brackets linear:
+    ## each `[` of `[[[…a]…]]]` is a shortcut candidate whose label holds
+    ## every bracket inside it, and slicing and folding each one was
+    ## quadratic.
+    max_label_chars : U64
+    max_label_chars = 999
+
+    ## The most bytes one code point takes in UTF-8.
+    max_utf8_bytes : U64
+    max_utf8_bytes = 4
+
+    ## Is `b[from, to)` short enough to be a link label? The spec counts
+    ## characters, so this counts code points, and only when the byte length
+    ## alone does not decide it: the answer never costs more than
+    ## `max_utf8_bytes * max_label_chars` bytes, however long the label.
+    label_fits : List(U8), U64, U64 -> Bool
+    label_fits = |b, from, to| {
+        n = to - from
+        if n <= Link.max_label_chars {
+            True
+        } else if n > Link.max_utf8_bytes * Link.max_label_chars {
+            False
+        } else {
+            List.count_if(List.sublist(b, { start: from, len: n }), Bytes.is_utf8_lead) <= Link.max_label_chars
+        }
+    }
+
     lookup : Ref.Index, Str -> Try(Ref.Def, [NotFound])
     lookup = |defs, key|
         match Dict.get(defs, key) {

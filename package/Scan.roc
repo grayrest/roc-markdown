@@ -392,11 +392,10 @@ Scan := [].{
                     sctx = second.ctx
                     match second.close {
                         Ok(rclose) => {
-                            written = Bytes.slice(sctx.b, close + 2, rclose)
-                            key = if Str.is_empty(written) {
-                                Bytes.slice(sctx.b, i + skip, close)
+                            key = if rclose == close + 2 {
+                                { from: i + skip, to: close }
                             } else {
-                                written
+                                { from: close + 2, to: rclose }
                             }
                             Scan.resolve(sctx, nest, i, skip, close, rclose + 1, key, buf, out, image)
                         }
@@ -420,7 +419,7 @@ Scan := [].{
             ## `[label]` alone — a SHORTCUT reference. Falls back to
             ## literal text when no definition matches, which is what
             ## keeps `[not a link]` readable.
-            Scan.resolve(ctx, nest, i, skip, close, close + 1, Bytes.slice(ctx.b, i + skip, close), buf, out, image)
+            Scan.resolve(ctx, nest, i, skip, close, close + 1, { from: i + skip, to: close }, buf, out, image)
         } else {
             match Link.match_paren(ctx.b, close + 2, 1, ctx.gts) {
                 Ok(pclose) => {
@@ -432,7 +431,7 @@ Scan := [].{
                         ## followed by literal text, not text throughout
                         ## — so a bad inline destination retries as one
                         ## rather than giving up.
-                        Scan.resolve(ctx, nest, i, skip, close, close + 1, Bytes.slice(ctx.b, i + skip, close), buf, out, image)
+                        Scan.resolve(ctx, nest, i, skip, close, close + 1, { from: i + skip, to: close }, buf, out, image)
                     }
                 }
                 Err(_) => Scan.learned(ctx, Scan.literal(ctx, i, skip, buf, out))
@@ -459,9 +458,15 @@ Scan := [].{
     ##
     ## `resume` is where scanning continues — past the second bracket for a full
     ## reference, past the first for a shortcut — so one function serves both.
-    resolve : Scan.Ctx, U64, U64, U64, U64, U64, Str, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
+    ##
+    ## `key` is where the label's text lies. A label longer than a label may
+    ## be (`Link.label_fits`) is text before it is sliced or folded.
+    resolve : Scan.Ctx, U64, U64, U64, U64, U64, { from : U64, to : U64 }, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
     resolve = |ctx, nest, i, skip, close, resume, key, buf, out, image|
-        match Link.lookup(ctx.defs, Link.fold_label(key)) {
+        if !Link.label_fits(ctx.b, key.from, key.to) {
+            Scan.learned(ctx, Scan.literal(ctx, i, skip, buf, out))
+        } else
+        match Link.lookup(ctx.defs, Link.fold_label(Bytes.slice(ctx.b, key.from, key.to))) {
             Ok(d) => Scan.settle(ctx, nest, i, skip, close, resume, { dest: d.dest, title: d.title, ok: True }, buf, out, image)
             Err(_) => Scan.learned(ctx, Scan.literal(ctx, i, skip, buf, out))
         }

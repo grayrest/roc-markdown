@@ -28,6 +28,11 @@ Bytes := [].{
             Str.from_utf8_lossy(List.sublist(b, { start: from, len: to - from }))
         }
 
+    ## Does `c` start a code point, rather than continue one? UTF-8
+    ## continuation bytes are `0x80` to `0xBF`.
+    is_utf8_lead : U8 -> Bool
+    is_utf8_lead = |c| c < 0x80 or c >= 0xC0
+
     ## How many of byte `c` start at `i`.
     run_len : List(U8), U64, U8, U64 -> U64
     run_len = |b, i, c, acc|
