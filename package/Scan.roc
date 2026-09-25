@@ -21,8 +21,9 @@ Scan := [].{
     ## The byte helpers (`Bytes`) deliberately take a plain `List(U8)` instead;
     ## see that module.
     ##
-    ## `end` is where this scan stops: the end of `b`, or the `]` of a link
-    ## label being scanned in place (`settle`).
+    ## Where a scan stops and how many labels deep it is are not here: they
+    ## are `tokens`' own arguments, so that a label scan can be handed this
+    ## context whole (see `bracket_at`).
     ##
     ## `schemes` is the href policy (`Link.allows`). It is asked where a link
     ## is BUILT, so a refused href becomes text here, in the tree, and no
@@ -55,23 +56,17 @@ Scan := [].{
     ##    none does (`Link.match_bracket`).
     ##
     ## `tokens` learns `email_dead` itself; `bracket` learns `brackets` and
-    ## hands them back (`Learned`).
-    ##
-    ## `nest` is how many link labels this scan is inside (`settle`). At
-    ## `Emph.max_depth` a bracket is text, which bounds the tree and the
-    ## scanner's own recursion into labels.
+    ## hands them back (`Learned`), and so does a label scan (`settle`).
     Ctx : {
         b : List(U8),
         defs : Ref.Index,
         schemes : Link.Schemes,
-        end : U64,
         gt_end : U64,
         rb_end : U64,
         tick_last : List(U64),
         email_dead : U64,
         brackets : Link.Known,
         gts : List(U64),
-        nest : U64,
         lasts : Tag.Lasts,
     }
 
@@ -80,7 +75,6 @@ Scan := [].{
         b,
         defs,
         schemes,
-        end: List.len(b),
         gt_end: Scan.end_of_last(b, List.len(b), 62),
         rb_end: Scan.end_of_last(b, List.len(b), 93),
         tick_last: if List.contains(b, 96) {
@@ -95,7 +89,6 @@ Scan := [].{
         } else {
             []
         },
-        nest: 0,
         lasts: Tag.lasts_of(b),
     }
 
@@ -160,7 +153,10 @@ Scan := [].{
     push_all = |buf, xs| { ..buf, bytes: List.concat(buf.bytes, xs) }
 
     run : Str, Ref.Index, Link.Schemes -> List(Inl)
-    run = |s, defs, schemes| Emph.emphasis(Scan.tokens(Scan.context(Str.to_utf8(s), defs, schemes), 0, Scan.buf0(0), []))
+    run = |s, defs, schemes| {
+        b = Str.to_utf8(s)
+        Emph.emphasis(Scan.tokens(Scan.context(b, defs, schemes), List.len(b), 0, 0, Scan.buf0(0), []).out)
+    }
 
     ## --- stage 1: tokens -----------------------------------------------------
     ##
@@ -181,24 +177,30 @@ Scan := [].{
     learned : Scan.Ctx, Scan.Step -> Scan.Learned
     learned = |ctx, st| { i: st.i, buf: st.buf, out: st.out, ctx }
 
-    tokens : Scan.Ctx, U64, Scan.Buf, List(Emph.Tk) -> List(Emph.Tk)
-    tokens = |ctx, i, buf, out|
-        if i >= ctx.end {
-            Scan.flush(buf, i, out)
+    ## `end` is where this scan stops: the end of the text, or the `]` of a
+    ## link label being scanned in place (`settle`). `nest` is how many link
+    ## labels this scan is inside; at `Emph.max_depth` a bracket is text, which
+    ## bounds the tree and the scanner's own recursion into labels. The scan
+    ## hands back its tokens and the context it ends with, which holds what it
+    ## learned on the way.
+    tokens : Scan.Ctx, U64, U64, U64, Scan.Buf, List(Emph.Tk) -> { out : List(Emph.Tk), ctx : Scan.Ctx }
+    tokens = |ctx, end, nest, i, buf, out|
+        if i >= end {
+            { out: Scan.flush(buf, i, out), ctx }
         } else {
             c = Bytes.at(ctx.b, i)
             if c == 92 {
                 st = Scan.backslash(ctx, i, buf, out)
-                Scan.tokens(ctx, st.i, st.buf, st.out)
+                Scan.tokens(ctx, end, nest, st.i, st.buf, st.out)
             } else if c == 96 {
                 st = Scan.code_span(ctx, i, buf, out)
-                Scan.tokens(ctx, st.i, st.buf, st.out)
+                Scan.tokens(ctx, end, nest, st.i, st.buf, st.out)
             } else if c == 10 {
                 st = Scan.newline(i, buf, out)
-                Scan.tokens(ctx, st.i, st.buf, st.out)
+                Scan.tokens(ctx, end, nest, st.i, st.buf, st.out)
             } else if (c == 104 or c == 119 or c == 102) and Autolink.at_boundary(ctx.b, i) and Autolink.bare_len(ctx.b, i) > 0 {
                 st = Scan.bare_link(ctx, i, buf, out)
-                Scan.tokens(ctx, st.i, st.buf, st.out)
+                Scan.tokens(ctx, end, nest, st.i, st.buf, st.out)
             } else if i >= ctx.email_dead and Autolink.at_boundary(ctx.b, i) {
                 ## An email is found at its START, like a bare URL. Backing up
                 ## from the `@` looked simpler and could not work: an `_` in the
@@ -208,7 +210,7 @@ Scan := [].{
                 e = Autolink.email_len(ctx.b, i)
                 if e.len > 0 {
                     st = Scan.bare_autolink(ctx, i, i + e.len, "mailto:", buf, out)
-                    Scan.tokens(ctx, st.i, st.buf, st.out)
+                    Scan.tokens(ctx, end, nest, st.i, st.buf, st.out)
                 } else {
                     ## A miss marks the whole local-part run dead, and the byte
                     ## is dispatched again past this test. Every later boundary
@@ -217,26 +219,26 @@ Scan := [].{
                     ## local part that is a suffix of this one — so it fails
                     ## too. Without the mark, `a_a_a_…` re-scanned the rest of
                     ## the run at every underscore.
-                    Scan.tokens({ ..ctx, email_dead: i + Scan.max_u64(e.local, 1) }, i, buf, out)
+                    Scan.tokens({ ..ctx, email_dead: i + Scan.max_u64(e.local, 1) }, end, nest, i, buf, out)
                 }
             } else if c == 38 {
                 st = Scan.entity(ctx, i, buf, out)
-                Scan.tokens(ctx, st.i, st.buf, st.out)
+                Scan.tokens(ctx, end, nest, st.i, st.buf, st.out)
             } else if c == 60 {
                 st = Scan.angle(ctx, i, buf, out)
-                Scan.tokens(ctx, st.i, st.buf, st.out)
+                Scan.tokens(ctx, end, nest, st.i, st.buf, st.out)
             } else if c == 91 {
-                st = Scan.bracket(ctx, i, 1, buf, out, False)
-                Scan.tokens(st.ctx, st.i, st.buf, st.out)
+                st = Scan.bracket(ctx, nest, i, 1, buf, out, False)
+                Scan.tokens(st.ctx, end, nest, st.i, st.buf, st.out)
             } else if c == 33 and Bytes.at(ctx.b, i + 1) == 91 {
-                st = Scan.bracket(ctx, i, 2, buf, out, True)
-                Scan.tokens(st.ctx, st.i, st.buf, st.out)
+                st = Scan.bracket(ctx, nest, i, 2, buf, out, True)
+                Scan.tokens(st.ctx, end, nest, st.i, st.buf, st.out)
             } else if c == 42 or c == 95 or c == 126 {
                 n = Bytes.run_len(ctx.b, i, c, 0)
                 flags = Emph.flanking(ctx.b, i, n, c)
-                Scan.tokens(ctx, i + n, Scan.buf0(i + n), List.append(Scan.flush(buf, i, out), Delim({ ch: c, n, opener: flags.opener, closer: flags.closer, both: flags.opener and flags.closer, at: i })))
+                Scan.tokens(ctx, end, nest, i + n, Scan.buf0(i + n), List.append(Scan.flush(buf, i, out), Delim({ ch: c, n, opener: flags.opener, closer: flags.closer, both: flags.opener and flags.closer, at: i })))
             } else {
-                Scan.tokens(ctx, i + 1, Scan.push(buf, c), out)
+                Scan.tokens(ctx, end, nest, i + 1, Scan.push(buf, c), out)
             }
         }
 
@@ -352,14 +354,14 @@ Scan := [].{
     ## splices them back as text. Scanning it up front and again on the way to
     ## a literal made nested brackets exponential — each level scanned its label
     ## twice, so `[[[…a](u)…](u)](u)` doubled in cost per level.
-    bracket : Scan.Ctx, U64, U64, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
-    bracket = |ctx, i, skip, buf, out, image|
-        if ctx.nest >= Emph.max_depth {
+    bracket : Scan.Ctx, U64, U64, U64, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
+    bracket = |ctx, nest, i, skip, buf, out, image|
+        if nest >= Emph.max_depth {
             ## As many labels deep as the tree may nest: this label is not
             ## scanned, so neither the tree nor this recursion grows further.
             Scan.learned(ctx, Scan.literal(ctx, i, skip, buf, out))
         } else {
-            Scan.bracket_at(ctx, i, skip, buf, out, image)
+            Scan.bracket_at(ctx, nest, i, skip, buf, out, image)
         }
 
     ## Nothing here reads `ctx` once `close_of` has it, and nothing reads the
@@ -368,8 +370,16 @@ Scan := [].{
     ## into a walk shares its `brackets` with the walk, so every answer the
     ## walk recorded copied the whole dictionary — 40,000 `[a][b]` in one
     ## paragraph took eleven seconds under `roc test`.
-    bracket_at : Scan.Ctx, U64, U64, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
-    bracket_at = |ctx, i, skip, buf, out, image| {
+    ##
+    ## The same holds for a label scan, and a spread is enough to break it:
+    ## `{ ..ctx, end: close }` passed to a scan from inside a branch keeps the
+    ## caller's record, and with it `brackets`, alive until the scan returns.
+    ## So nothing may spread a `Ctx` into a scan. `end` and `nest` are
+    ## `tokens`' arguments, a label scan gets the context whole, and every
+    ## step from here on hands back the context the last scan or walk ended
+    ## with.
+    bracket_at : Scan.Ctx, U64, U64, U64, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
+    bracket_at = |ctx, nest, i, skip, buf, out, image| {
         first = Scan.close_of(ctx, i + skip)
         fctx = first.ctx
         match first.close {
@@ -380,7 +390,7 @@ Scan := [].{
                     ## is why this cannot just read the second one.
                     second = Scan.close_of(fctx, close + 2)
                     sctx = second.ctx
-                    step = match second.close {
+                    match second.close {
                         Ok(rclose) => {
                             written = Bytes.slice(sctx.b, close + 2, rclose)
                             key = if Str.is_empty(written) {
@@ -388,14 +398,12 @@ Scan := [].{
                             } else {
                                 written
                             }
-                            Scan.resolve(sctx, i, skip, close, rclose + 1, key, buf, out, image)
+                            Scan.resolve(sctx, nest, i, skip, close, rclose + 1, key, buf, out, image)
                         }
-                        Err(_) => Scan.literal(sctx, i, skip, buf, out)
+                        Err(_) => Scan.learned(sctx, Scan.literal(sctx, i, skip, buf, out))
                     }
-                    Scan.learned(sctx, step)
                 } else {
-                    step = Scan.inline_or_shortcut(fctx, i, skip, close, buf, out, image)
-                    Scan.learned(fctx, step)
+                    Scan.inline_or_shortcut(fctx, nest, i, skip, close, buf, out, image)
                 }
             Err(_) => {
                 step = Scan.literal(fctx, i, skip, buf, out)
@@ -406,28 +414,28 @@ Scan := [].{
 
     ## The bracket closed at `close` and no second bracket follows: an inline
     ## link if `(` does, a shortcut reference otherwise.
-    inline_or_shortcut : Scan.Ctx, U64, U64, U64, Scan.Buf, List(Emph.Tk), Bool -> Scan.Step
-    inline_or_shortcut = |ctx, i, skip, close, buf, out, image|
+    inline_or_shortcut : Scan.Ctx, U64, U64, U64, U64, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
+    inline_or_shortcut = |ctx, nest, i, skip, close, buf, out, image|
         if Bytes.at(ctx.b, close + 1) != 40 {
             ## `[label]` alone — a SHORTCUT reference. Falls back to
             ## literal text when no definition matches, which is what
             ## keeps `[not a link]` readable.
-            Scan.resolve(ctx, i, skip, close, close + 1, Bytes.slice(ctx.b, i + skip, close), buf, out, image)
+            Scan.resolve(ctx, nest, i, skip, close, close + 1, Bytes.slice(ctx.b, i + skip, close), buf, out, image)
         } else {
             match Link.match_paren(ctx.b, close + 2, 1, ctx.gts) {
                 Ok(pclose) => {
                     parts = Link.dest_title(Bytes.slice(ctx.b, close + 2, pclose))
                     if parts.ok {
-                        Scan.settle(ctx, i, skip, close, pclose + 1, parts, buf, out, image)
+                        Scan.settle(ctx, nest, i, skip, close, pclose + 1, parts, buf, out, image)
                     } else {
                         ## `[foo](not a link)` is a shortcut reference
                         ## followed by literal text, not text throughout
                         ## — so a bad inline destination retries as one
                         ## rather than giving up.
-                        Scan.resolve(ctx, i, skip, close, close + 1, Bytes.slice(ctx.b, i + skip, close), buf, out, image)
+                        Scan.resolve(ctx, nest, i, skip, close, close + 1, Bytes.slice(ctx.b, i + skip, close), buf, out, image)
                     }
                 }
-                Err(_) => Scan.literal(ctx, i, skip, buf, out)
+                Err(_) => Scan.learned(ctx, Scan.literal(ctx, i, skip, buf, out))
             }
         }
 
@@ -451,11 +459,11 @@ Scan := [].{
     ##
     ## `resume` is where scanning continues — past the second bracket for a full
     ## reference, past the first for a shortcut — so one function serves both.
-    resolve : Scan.Ctx, U64, U64, U64, U64, Str, Scan.Buf, List(Emph.Tk), Bool -> Scan.Step
-    resolve = |ctx, i, skip, close, resume, key, buf, out, image|
+    resolve : Scan.Ctx, U64, U64, U64, U64, U64, Str, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
+    resolve = |ctx, nest, i, skip, close, resume, key, buf, out, image|
         match Link.lookup(ctx.defs, Link.fold_label(key)) {
-            Ok(d) => Scan.settle(ctx, i, skip, close, resume, { dest: d.dest, title: d.title, ok: True }, buf, out, image)
-            Err(_) => Scan.literal(ctx, i, skip, buf, out)
+            Ok(d) => Scan.settle(ctx, nest, i, skip, close, resume, { dest: d.dest, title: d.title, ok: True }, buf, out, image)
+            Err(_) => Scan.learned(ctx, Scan.literal(ctx, i, skip, buf, out))
         }
 
     ## A destination is in hand; scan the label once and decide.
@@ -473,21 +481,25 @@ Scan := [].{
     ## link whose destination does): the label was not a label after all. The
     ## tokens are still DELIMITERS, not finished emphasis, so a `*` inside the
     ## label can still pair with one outside it.
-    settle : Scan.Ctx, U64, U64, U64, U64, { dest : Str, title : Str, ok : Bool }, Scan.Buf, List(Emph.Tk), Bool -> Scan.Step
-    settle = |ctx, i, skip, close, resume, parts, buf, out, image| {
-        label = Scan.tokens({ ..ctx, end: close, nest: ctx.nest + 1 }, i + skip, Scan.buf0(i + skip), [])
+    ##
+    ## What the label scan learned stays learned: a walk's answer depends only
+    ## on the text and the position it started from, not on where the scan
+    ## that asked stops, and so does `email_dead`.
+    settle : Scan.Ctx, U64, U64, U64, U64, U64, { dest : Str, title : Str, ok : Bool }, Scan.Buf, List(Emph.Tk), Bool -> Scan.Learned
+    settle = |ctx, nest, i, skip, close, resume, parts, buf, out, image| {
+        { out: label, ctx: lctx } = Scan.tokens(ctx, close, nest + 1, i + skip, Scan.buf0(i + skip), [])
         stop = Scan.tks_end(label, i + skip)
         if stop > close or (!image and Link.tks_have_link(label)) {
-            Scan.splice(ctx, i, skip, stop, label, buf, out)
+            Scan.learned(lctx, Scan.splice(lctx, i, skip, stop, label, buf, out))
         } else {
             inner = Emph.emphasis(label)
             ## The node would stand one level above its label's tallest, and
             ## past the cap it is refused the way a link in a link is.
             if Emph.height_all(inner) >= Emph.max_depth {
-                Scan.splice(ctx, i, skip, stop, label, buf, out)
+                Scan.learned(lctx, Scan.splice(lctx, i, skip, stop, label, buf, out))
             } else {
-                nodes = Link.link_node(i, resume, inner, parts, image, ctx.schemes)
-                { i: resume, buf: Scan.buf0(resume), out: List.concat(Scan.flush(buf, i, out), nodes) }
+                nodes = Link.link_node(i, resume, inner, parts, image, lctx.schemes)
+                Scan.learned(lctx, { i: resume, buf: Scan.buf0(resume), out: List.concat(Scan.flush(buf, i, out), nodes) })
             }
         }
     }

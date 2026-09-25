@@ -421,6 +421,15 @@ expect Test.html("a ${Str.repeat("<![CDATA[", 10000)}>") == "<p>a ${Str.repeat("
 ## recorded copied the whole memo: 40,000 `[a][b]` took eleven seconds.
 ## should_resolve_forty_thousand_full_references_in_one_paragraph
 expect Test.html("${Str.repeat("[a][b] ", 40000)}\n\n[b]: /u") == "<p>${Str.repeat("<a href=\"/u\">a</a> ", 39999)}<a href=\"/u\">a</a></p>\n"
+## A label scan got the context as a copy with its own `end`, which left the
+## caller's copy sharing the memo, so the label's first walk copied all of
+## it. A label walks where the scanner and the walk disagree, as they do
+## about a refused autolink: 80,000 `[<javascript:[y]>](u)` took fourteen
+## seconds.
+## should_link_eighty_thousand_labels_holding_a_refused_autolink
+expect
+    Test.html(Str.repeat("[<javascript:[y]>](u) ", 80000))
+    == "<p>${Str.repeat("<a href=\"u\">&lt;javascript:[y]&gt;</a> ", 79999)}<a href=\"u\">&lt;javascript:[y]&gt;</a></p>\n"
 
 ## --- backtick runs inside a bracket --------------------------------------------
 ##
