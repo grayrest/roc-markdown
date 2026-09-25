@@ -253,7 +253,7 @@ Link := [].{
             found = if c == 33 or c == 63 {
                 Bytes.find_byte(b, i + 1, 62)
             } else {
-                Link.first_gt(b, i + 1)
+                Link.first_gt(b, { i: i + 1, quote: 0 })
             }
             match found {
                 Ok(gt) =>
@@ -266,38 +266,33 @@ Link := [].{
             }
         }
 
-    ## The first `>` at or after `i`, or `NotFound` at a `<` outside quotes.
-    first_gt : List(U8), U64 -> Try(U64, [NotFound])
-    first_gt = |b, i|
+    ## Where the `>` search stands: at `i`, inside the quote `quote` opened,
+    ## or outside any when it is 0.
+    GtWalk : { i : U64, quote : U8 }
+
+    ## The first `>` from `i` on, or `NotFound` at a `<` outside quotes.
+    ##
+    ## One loop that carries the open quote: a quote reader used to call back
+    ## into this at its closing quote, and that mutual recursion is not a
+    ## loop, so each quote pair cost a stack frame and about 350,000 of them
+    ## overflowed. The state is one record, destructured in the parameter
+    ## list, for the reason `Emph.emph_walk` gives.
+    first_gt : List(U8), Link.GtWalk -> Try(U64, [NotFound])
+    first_gt = |b, { i, quote }|
         if i >= List.len(b) {
             Err(NotFound)
         } else {
             c = Bytes.at(b, i)
             if c == 62 {
                 Ok(i)
+            } else if quote != 0 {
+                Link.first_gt(b, { i: i + 1, quote: if c == quote { 0 } else { quote } })
             } else if c == 60 {
                 Err(NotFound)
             } else if c == 34 or c == 39 {
-                Link.quote_or_gt(b, i + 1, c)
+                Link.first_gt(b, { i: i + 1, quote: c })
             } else {
-                Link.first_gt(b, i + 1)
-            }
-        }
-
-    ## Inside a quote opened by `q`: the `>` that is first, or on past the
-    ## closing quote.
-    quote_or_gt : List(U8), U64, U8 -> Try(U64, [NotFound])
-    quote_or_gt = |b, i, q|
-        if i >= List.len(b) {
-            Err(NotFound)
-        } else {
-            c = Bytes.at(b, i)
-            if c == 62 {
-                Ok(i)
-            } else if c == q {
-                Link.first_gt(b, i + 1)
-            } else {
-                Link.quote_or_gt(b, i + 1, q)
+                Link.first_gt(b, { i: i + 1, quote: 0 })
             }
         }
 

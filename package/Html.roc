@@ -162,14 +162,23 @@ Html := [].{
         }
 
     rows : List(Block.Cell), U64, List(Block.Align), Bool -> Str
-    rows = |cells, ncols, align, safe|
+    rows = |cells, ncols, align, safe| Html.rows_walk(ncols, align, safe, { cells, html: "" })
+
+    ## The body rows rendered so far, and the cells still to render.
+    RowsStep : { cells : List(Block.Cell), html : Str }
+
+    ## Each row is appended to what is done and the walk calls itself last,
+    ## which is a loop. Rendering the rest first and putting the row in front
+    ## cost a stack frame per row, and about 82,000 rows overflowed. The state
+    ## is one record, destructured in the parameter list, for the reason
+    ## `Emph.emph_walk` gives.
+    rows_walk : U64, List(Block.Align), Bool, Html.RowsStep -> Str
+    rows_walk = |ncols, align, safe, { cells, html }|
         if List.is_empty(cells) {
-            ""
+            html
         } else {
-            Str.concat(
-                Html.row("td", List.take_first(cells, ncols), align, safe),
-                Html.rows(List.drop_first(cells, ncols), ncols, align, safe),
-            )
+            row = Html.row("td", List.take_first(cells, ncols), align, safe)
+            Html.rows_walk(ncols, align, safe, { cells: List.drop_first(cells, ncols), html: Str.concat(html, row) })
         }
 
     row : Str, List(Block.Cell), List(Block.Align), Bool -> Str

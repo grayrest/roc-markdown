@@ -12,6 +12,8 @@ import Inl exposing [Inl]
 import Block exposing [Block]
 import Markdown
 import Scan
+import Html
+import Loc
 
 Test := [].{
     ## Blocks rendered as a compact shape string, so an assertion reads as the
@@ -448,4 +450,23 @@ expect {
     nested = |n| "${Str.repeat("(", n)}u${Str.repeat(")", n)}"
     Test.html("[a](${nested(32)})") == "<p><a href=\"${nested(32)}\">a</a></p>\n"
     and Test.html("[a](${nested(33)})") == "<p>[a](${nested(33)})</p>\n"
+}
+
+## --- one frame per repetition ----------------------------------------------------
+##
+## Three walks recursed once per item without being loops: attribute checking
+## and its value reader called each other once per attribute, the bracket
+## walk's `>` finder and its quote reader once per quote pair, and table
+## rendering put each row in front of the rest. Each overflowed the stack.
+## should_check_a_tag_of_two_hundred_thousand_attributes
+expect Test.html("a <a${Str.repeat(" b=\"c\"", 200000)}>") == "<p>a <!-- raw HTML omitted --></p>\n"
+## should_walk_a_label_holding_half_a_million_quote_pairs
+expect Test.html("[<a ${Str.repeat("\"x\"", 500000)}>]") == "<p>[&lt;a ${Str.repeat("&quot;x&quot;", 500000)}&gt;]</p>\n"
+## Built by hand: parsing a table this long is slow under `roc test`, and
+## rendering is what overflowed.
+## should_render_a_table_of_two_hundred_thousand_rows
+expect {
+    cell = [Inl.mk(Loc.none(0), Text("a"))]
+    table = Block.mk(Loc.none(0), Table({ ncols: 1, align: [None], cells: List.repeat(cell, 200001) }))
+    Html.render([table], True) == "<table>\n<thead>\n<tr>\n<th>a</th>\n</tr>\n</thead>\n<tbody>\n${Str.repeat("<tr>\n<td>a</td>\n</tr>\n", 200000)}</tbody>\n</table>\n"
 }

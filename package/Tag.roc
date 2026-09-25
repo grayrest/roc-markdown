@@ -83,15 +83,30 @@ Tag := [].{
     ## `<a h*#ref="hi">` and `<a href="hi'>` were raw HTML rather than the text
     ## they are — and `<http://foo.bar/baz bim>` was a tag named `http`.
     attrs_ok : List(U8), U64 -> Bool
-    attrs_ok = |b, i|
-        if i >= List.len(b) {
+    attrs_ok = |b, i| Tag.attrs_walk(b, { i, ok: True })
+
+    ## Where the attribute walk stands: at `i`, or, when `ok` is false, done
+    ## with a malformed value.
+    AttrStep : { i : U64, ok : Bool }
+
+    ## One loop: a value is read by `value_end`, whose step comes straight
+    ## back here. The value reader used to carry on the walk itself, and that
+    ## mutual recursion is not a loop, so each attribute cost a stack frame
+    ## and about 120,000 of them overflowed. The state is one record,
+    ## destructured in the parameter list, for the reason `Emph.emph_walk`
+    ## gives.
+    attrs_walk : List(U8), Tag.AttrStep -> Bool
+    attrs_walk = |b, { i, ok }|
+        if !ok {
+            False
+        } else if i >= List.len(b) {
             True
         } else {
             c = Bytes.at(b, i)
             if c == 47 or c == 62 {
                 i + 1 >= List.len(b) or Bytes.at(b, i + 1) == 62
             } else if Bytes.is_space(c) {
-                Tag.attrs_ok(b, i + 1)
+                Tag.attrs_walk(b, { i: i + 1, ok: True })
             } else if Bytes.is_alpha(c) or c == 95 or c == 58 {
                 n = Tag.attr_name_len(b, i, 0)
                 ## Whitespace is allowed on BOTH sides of `=`, so the name is
@@ -99,9 +114,9 @@ Tag := [].{
                 ## attribute, not a boolean `bam` followed by junk.
                 eq = Tag.skip_spaces(b, i + n)
                 if Bytes.at(b, eq) == 61 {
-                    Tag.attr_value(b, Tag.skip_spaces(b, eq + 1))
+                    Tag.attrs_walk(b, Tag.value_end(b, Tag.skip_spaces(b, eq + 1)))
                 } else {
-                    Tag.attrs_ok(b, i + n)
+                    Tag.attrs_walk(b, { i: i + n, ok: True })
                 }
             } else {
                 False
@@ -136,8 +151,10 @@ Tag := [].{
         }
     }
 
-    attr_value : List(U8), U64 -> Bool
-    attr_value = |b, i| {
+    ## Where the attribute value starting at `i` ends, for the walk to carry
+    ## on from, or `ok: False` when no well-formed value starts there.
+    value_end : List(U8), U64 -> Tag.AttrStep
+    value_end = |b, i| {
         c = Bytes.at(b, i)
         if c == 34 or c == 39 {
             match Bytes.find_byte(b, i + 1, c) {
@@ -145,14 +162,13 @@ Tag := [].{
                     ## Attributes are separated by WHITESPACE — without that,
                     ## `<a href='bar'title=title>` looked well-formed.
                     nxt = Bytes.at(b, close + 1)
-                    (close + 1 >= List.len(b) or Bytes.is_space(nxt) or nxt == 62 or nxt == 47)
-                    and Tag.attrs_ok(b, close + 1)
+                    { i: close + 1, ok: close + 1 >= List.len(b) or Bytes.is_space(nxt) or nxt == 62 or nxt == 47 }
                 }
-                Err(_) => False
+                Err(_) => { i, ok: False }
             }
         } else {
             n = Tag.unquoted_len(b, i, 0)
-            n > 0 and Tag.attrs_ok(b, i + n)
+            { i: i + n, ok: n > 0 }
         }
     }
 
