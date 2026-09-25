@@ -534,6 +534,15 @@ expect {
     Test.html("[a](${nested(32)})") == "<p><a href=\"${nested(32)}\">a</a></p>\n"
     and Test.html("[a](${nested(33)})") == "<p>[a](${nested(33)})</p>\n"
 }
+## A bracket whose destination never closes is still a shortcut reference,
+## and so is one whose parens nest too deep.
+## should_link_a_defined_label_followed_by_an_unclosed_paren
+expect Test.html("[foo](\n\n[foo]: /u") == "<p><a href=\"/u\">foo</a>(</p>\n"
+## should_link_a_defined_label_followed_by_parens_nested_too_deep
+expect {
+    nested = "${Str.repeat("(", 33)}u${Str.repeat(")", 33)}"
+    Test.html("[foo](${nested})\n\n[foo]: /u") == "<p><a href=\"/u\">foo</a>(${nested})</p>\n"
+}
 
 ## --- one frame per repetition ----------------------------------------------------
 ##

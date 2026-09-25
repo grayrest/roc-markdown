@@ -440,7 +440,11 @@ Scan := [].{
                         Scan.resolve(ctx, nest, i, skip, close, close + 1, { from: i + skip, to: close }, buf, out, image)
                     }
                 }
-                Err(_) => Scan.learned(ctx, Scan.literal(ctx, i, skip, buf, out))
+                ## No `)` closes the destination, or its parens nest too
+                ## deep: no destination at all is a bad one too, so `[foo](`
+                ## retries as a shortcut reference, as cmark and
+                ## commonmark.js read it.
+                Err(_) => Scan.resolve(ctx, nest, i, skip, close, close + 1, { from: i + skip, to: close }, buf, out, image)
             }
         }
 
