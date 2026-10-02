@@ -288,6 +288,17 @@ expect Test.html("&#99999999999999999999;") == "<p>&amp;#99999999999999999999;</
 ## should_render_an_overlong_hex_reference_as_text
 expect Test.html("&#x123456789ABCDEF01;") == "<p>&amp;#x123456789ABCDEF01;</p>\n"
 
+## --- the invisible direction marks ------------------------------------------
+##
+## `&lrm;` and `&rlm;` are kept as `\u(...)` escapes in `Ents.roc`: the
+## compiler refuses a literal direction control in source, because it can make
+## the text read differently from what runs. The escapes must still decode to
+## the same two characters, compared here by number.
+## should_decode_the_left_to_right_mark
+expect Str.to_utf8(Test.html("&lrm;")) == Str.to_utf8("<p>\u(200E)</p>\n")
+## should_decode_the_right_to_left_mark
+expect Str.to_utf8(Test.html("&rlm;")) == Str.to_utf8("<p>\u(200F)</p>\n")
+
 ## --- the entity tables are sorted ---------------------------------------------
 ##
 ## `Ents.lookup` bisects the tables, so a name out of order is a name it may
