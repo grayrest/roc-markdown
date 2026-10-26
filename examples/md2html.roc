@@ -19,12 +19,12 @@ app [main!] {
 	md: "../package/main.roc",
 }
 
-import pf.OsStr exposing [OsStr]
-import pf.Path exposing [Path]
+import pf.OsStr
+import pf.Path
 import pf.Stdout
 import pf.Stderr
 import md.Markdown
-import md.Block exposing [Block]
+import md.Block
 import md.Inl
 
 main! : List(OsStr) => Try({}, _)

@@ -4,9 +4,9 @@
 ## shape of a whole RUN rather than by a line's prefix — the header/delimiter
 ## distinction is invisible until the run is complete.
 import Ref
-import Loc exposing [Loc]
-import Block exposing [Block]
-import Inl exposing [Inl]
+import Loc
+import Block
+import Inl
 import Scan
 import Link
 

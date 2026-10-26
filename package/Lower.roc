@@ -6,10 +6,10 @@
 ## block tree gives that for free: the structure is already decided, so the
 ## first walk can see every paragraph in the document before the second walk
 ## reads any of them.
-import Doc exposing [Doc]
-import Loc exposing [Loc]
-import Block exposing [Block]
-import Inl exposing [Inl]
+import Doc
+import Loc
+import Block
+import Inl
 import Ref
 import Defs
 import Link

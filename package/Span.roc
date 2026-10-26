@@ -24,7 +24,7 @@
 ## The trade was made knowingly: a link to nowhere is not worth a tag on every
 ## run. This is the input that pays for it.
 ##
-import Inl exposing [Inl]
+import Inl
 
 ## `bold`, `italic` and `code` are independent flags, so the record can express
 ## combinations the parser does not currently produce (bold code, an italic

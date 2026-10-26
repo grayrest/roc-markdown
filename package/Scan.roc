@@ -9,7 +9,7 @@
 ##     both or neither depends on the characters either side of it, so it cannot
 ##     be decided during (1).
 import Ref
-import Inl exposing [Inl]
+import Inl
 import Ents
 import Bytes
 import Emph

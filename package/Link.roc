@@ -7,7 +7,7 @@
 ## `Scan.resolve`, `Scan.settle`) stays in `Scan`: it scans the label with
 ## `Scan.tokens`, and a module cannot import the one that imports it.
 import Ref
-import Inl exposing [Inl]
+import Inl
 import Ents
 import Bytes
 import Tag

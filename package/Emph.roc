@@ -6,7 +6,7 @@
 ## as it meets each run. Which runs pair up can only be decided once every run
 ## is known, so that is a second pass over the token list (`emphasis`), in the
 ## order the spec defines.
-import Inl exposing [Inl]
+import Inl
 import Bytes
 
 Emph := [].{

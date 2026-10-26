@@ -1,6 +1,6 @@
 ## Blocks to a semantic HTML fragment.
-import Inl exposing [Inl]
-import Block exposing [Block]
+import Inl
+import Block
 
 Html := [].{
     ## Block separators and a trailing newline are part of the OUTPUT SHAPE the

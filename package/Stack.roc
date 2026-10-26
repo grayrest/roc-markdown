@@ -14,8 +14,8 @@
 ##
 ## The finished tree is therefore only ever built bottom-up by appending, and no
 ## recursive value is ever rebuilt to change one of its variants
-import Doc exposing [Doc]
-import Loc exposing [Loc]
+import Doc
+import Loc
 import Lex
 import Bytes
 import Link

@@ -22,7 +22,7 @@
 ## phase 1 stripped is decided per line and the payload no longer records it.
 ## The leaves phase 2 does NOT re-parse — a fence's contents, a raw HTML block —
 ## stay `Str`, since nothing downstream needs an offset into them.
-import Loc exposing [Loc]
+import Loc
 
 Doc := { at : Loc.Ivl, node : Doc.Node }.{
     Node : [

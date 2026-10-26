@@ -7,9 +7,9 @@
 ##
 ## Each block below states what it is defending. A test whose failure would not
 ## tell you which decision broke is not worth the line it costs.
-import Span exposing [Span]
-import Inl exposing [Inl]
-import Block exposing [Block]
+import Span
+import Inl
+import Block
 import Markdown
 import Scan
 import Html

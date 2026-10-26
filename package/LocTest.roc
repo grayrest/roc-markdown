@@ -17,9 +17,9 @@
 ##  - (d') for a node whose payload is a verbatim source slice, the source over
 ##    `outer` reconstructs the payload.
 import Markdown
-import Block exposing [Block]
-import Inl exposing [Inl]
-import Loc exposing [Loc]
+import Block
+import Inl
+import Loc
 
 LocTest := [].{
     ## The immediate block children of a block.

@@ -11,7 +11,7 @@
 ## The second walk is why the first can ignore definitions entirely. A reference
 ## may be written before the definition that resolves it, so inlines cannot be
 ## parsed as each block closes.
-import Block exposing [Block]
+import Block
 import Stack
 import Lower
 import Html

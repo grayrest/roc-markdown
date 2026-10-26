@@ -10,7 +10,7 @@
 ## the two `**` runs as well as the word, so the editor can elide the markers and
 ## reveal them under the caret. The offsets are captured during the scan and
 ## carried through emphasis matching; matching a node means matching `i.node`.
-import Loc exposing [Loc]
+import Loc
 
 Inl := { loc : Loc.T, node : Inl.Node }.{
     Node : [

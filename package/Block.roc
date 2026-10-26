@@ -10,8 +10,8 @@
 ## is what the editor uses to map the caret's position back to a block so it can
 ## reveal that block's raw syntax and decorate its source range. A block's
 ## `node` is the block itself; matching a `Block` means matching `b.node`.
-import Inl exposing [Inl]
-import Loc exposing [Loc]
+import Inl
+import Loc
 
 Block := { loc : Loc.T, node : Block.Node }.{
     Node : [
