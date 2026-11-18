@@ -291,8 +291,8 @@ Scan := [].{
         }
         match found {
             Ok(close) => {
-                raw = Bytes.slice(ctx.b, i + n, close)
-                { i: close + n, buf: Scan.buf0(close + n), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + n, Code(Scan.strip_code(raw))))) }
+                inner = Bytes.slice(ctx.b, i + n, close)
+                { i: close + n, buf: Scan.buf0(close + n), out: List.append(Scan.flush(buf, i, out), Node(Inl.at(i, close + n, Code(Scan.strip_code(inner))))) }
             }
             Err(_) => { i: i + n, buf: Scan.push_all(buf, List.repeat(96, n)), out: out }
         }
@@ -302,8 +302,8 @@ Scan := [].{
     ## trailing space is stripped when the content has both and is not all
     ## spaces — the rule that lets `` ` `` `` hold a literal backtick.
     strip_code : Str -> Str
-    strip_code = |raw| {
-        spaced = Str.join_with(raw.split_on("\n"), " ")
+    strip_code = |inner| {
+        spaced = Str.join_with(inner.split_on("\n"), " ")
         b = Str.to_utf8(spaced)
         n = List.len(b)
         if n >= 2 and Bytes.at(b, 0) == 32 and Bytes.at(b, n - 1) == 32 and !Scan.all_spaces(b) {

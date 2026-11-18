@@ -126,13 +126,13 @@ Loc := [].{
     ## them. `outer` spans from the first to the last.
     project : List(Loc.Seg), List(U64), U64, U64 -> Loc.T
     project = |segs, starts, start, end| {
-        parts = Loc.parts(segs, starts, start, end, Loc.line_of(starts, start), [])
-        match List.first(parts) {
+        ivls = Loc.parts(segs, starts, start, end, Loc.line_of(starts, start), [])
+        match List.first(ivls) {
             Err(_) => Loc.none(Loc.point(segs, starts, start))
             Ok(f) =>
-                match List.last(parts) {
-                    Ok(l) => { outer: { start: f.start, end: l.end }, content: parts }
-                    Err(_) => { outer: f, content: parts }
+                match List.last(ivls) {
+                    Ok(l) => { outer: { start: f.start, end: l.end }, content: ivls }
+                    Err(_) => { outer: f, content: ivls }
                 }
         }
     }

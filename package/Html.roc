@@ -177,8 +177,8 @@ Html := [].{
         if List.is_empty(cells) {
             html
         } else {
-            row = Html.row("td", List.take_first(cells, ncols), align, safe)
-            Html.rows_walk(ncols, align, safe, { cells: List.drop_first(cells, ncols), html: Str.concat(html, row) })
+            row_html = Html.row("td", List.take_first(cells, ncols), align, safe)
+            Html.rows_walk(ncols, align, safe, { cells: List.drop_first(cells, ncols), html: Str.concat(html, row_html) })
         }
 
     row : Str, List(Block.Cell), List(Block.Align), Bool -> Str
