@@ -36,6 +36,26 @@ md2html +file:
 # Everything that gates. `spec` is NOT in it — it is the target, and it is red.
 check: test check-examples
 
+# Build the package to wasm and report its section sizes — the numbers behind
+# the README's "Build size" table. `app` is a path under `wasm/`:
+# `app/main.roc` links the package, `probe/main.roc` links only the platform,
+# which is the control that separates the package's weight from the harness's.
+#
+# Uses `roc`: the wasm backend regression that once forced a pinned compiler
+# (`release-fast-cb55b063`) was fixed between `release-fast-ec598185` (Oct 22,
+# where `--target=wasm32` segfaulted on this app) and `release-fast-f20c8640`
+# (Nov 17). Needs `rustc` with the wasm32-unknown-unknown target, `wasm-ld`,
+# and `llvm-ar` — BSD `ar` cannot extract rustc's wasm32 staticlib.
+wasm-size app="app/main.roc":
+    ROC="{{ roc }}" APP="{{ app }}" OUT=build/out.wasm bash wasm/build.sh
+    @printf 'app\ttotal\tcode\tdata\n'
+    @python3 wasm/sections.py wasm/build/out.wasm {{ app }}
+
+# Build the same module and RUN it under node, which is what proves the
+# Roc -> wasm32 -> Rust-host chain works rather than merely links.
+wasm-run app="app/main.roc": (wasm-size app)
+    node wasm/run.mjs wasm/build/out.wasm
+
 # API docs for the exposed modules.
 docs:
     "{{ roc }}" docs package/main.roc

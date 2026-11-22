@@ -13,3 +13,10 @@
 
 # report.py imports generate.py.
 __pycache__/
+
+# The wasm harness's build products: `roc glue` output, the Rust host's
+# generated ABI, the linked host object, and the modules themselves.
+/wasm/build/
+/wasm/glue-out/
+/wasm/platform/targets/
+/wasm/host/roc_platform_abi.rs

@@ -105,10 +105,19 @@ table = Ents.full        # the 2,125 HTML5 names — edit to Ents.minimal
 
 | | total | code | data |
 |---|---:|---:|---:|
-| `table = Ents.full` | 840,932 | 643,820 | 111,583 |
-| `table = Ents.minimal` | 786,682 | 645,180 | 55,973 |
+| `table = Ents.full` | 771,512 | 706,171 | 64,079 |
+| `table = Ents.minimal` | 715,752 | 706,161 | 8,331 |
+| the harness alone, no package | 23,879 | 19,522 | 3,880 |
 
-**−54,250 B**, essentially all of it data.
+**−55,760 B**, essentially all of it data — the code section moves by 10
+bytes, which is the point: it is a constant that disappears, not a code path
+that gets cheaper.
+
+Reproduce with `just wasm-size`, and the third row with `just wasm-size
+probe/main.roc` — the same platform and Rust host linked against no package
+at all, so what the parser itself weighs is the difference. `just wasm-run`
+builds the module and runs it under node, which is what distinguishes a module
+that works from one that merely links.
 
 Roc does not currently have any facilities for configuring this at build
 time so it's a source edit.
